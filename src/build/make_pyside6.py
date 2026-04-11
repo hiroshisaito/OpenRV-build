@@ -240,8 +240,88 @@ def build() -> None:
         if VARIANT == "Debug":
             pyside_build_args.append("--debug")
 
+    # On Windows, build a clean subprocess environment. The parent shell is often
+    # MSYS2 bash, which leaks Unix-style entries (e.g. "/c/Users/...") and
+    # corrupted tokens into PATH. Those derail native Windows subprocesses that
+    # look up cl.exe / nmake.exe / qtpaths.exe. We also set DISTUTILS_USE_SDK so
+    # setuptools respects the already-initialized VC environment rather than
+    # trying to locate vcvarsall.bat.
+    build_env = os.environ.copy()
+    if platform.system() == "Windows":
+        build_env["DISTUTILS_USE_SDK"] = "1"
+        build_env["MSSdk"] = "1"
+
+        current_path = build_env.get("PATH", "")
+        clean_entries = []
+        seen = set()
+        valid_entry = re.compile(r"^[A-Za-z]:[\\/]")
+        for entry in current_path.split(os.pathsep):
+            entry = entry.strip()
+            if not entry:
+                continue
+            if not valid_entry.match(entry):
+                continue
+            if "'" in entry or '"' in entry or "->" in entry:
+                continue
+            key = entry.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            clean_entries.append(entry)
+        build_env["PATH"] = os.pathsep.join(clean_entries)
+
+        # Ensure MSVC tools and Windows SDK are visible to the subprocess.
+        vs_base = os.environ.get("VSINSTALLDIR", "")
+        if not vs_base:
+            vswhere = os.path.join(
+                os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)"),
+                "Microsoft Visual Studio", "Installer", "vswhere.exe",
+            )
+            if os.path.exists(vswhere):
+                try:
+                    vs_base = subprocess.check_output(
+                        [vswhere, "-latest", "-prerelease", "-property", "installationPath", "-products", "*"],
+                    ).decode().strip()
+                except Exception:
+                    pass
+        if vs_base:
+            vc_tools_base = os.path.join(vs_base, "VC", "Tools", "MSVC")
+            if os.path.isdir(vc_tools_base):
+                for msvc_ver in sorted(os.listdir(vc_tools_base), reverse=True):
+                    vc_bin = os.path.join(vc_tools_base, msvc_ver, "bin", "HostX64", "x64")
+                    vc_include = os.path.join(vc_tools_base, msvc_ver, "include")
+                    vc_lib = os.path.join(vc_tools_base, msvc_ver, "lib", "x64")
+                    if os.path.isfile(os.path.join(vc_bin, "cl.exe")):
+                        print(f"Using MSVC {msvc_ver} from {vc_tools_base}")
+                        build_env["PATH"] = vc_bin + os.pathsep + build_env.get("PATH", "")
+                        existing_include = build_env.get("INCLUDE", "")
+                        build_env["INCLUDE"] = vc_include + (";" + existing_include if existing_include else "")
+                        existing_lib = build_env.get("LIB", "")
+                        build_env["LIB"] = vc_lib + (";" + existing_lib if existing_lib else "")
+                        # Windows 10 SDK
+                        win_sdk_root = os.environ.get("WindowsSdkDir", r"C:\Program Files (x86)\Windows Kits\10")
+                        win_sdk_ver = os.environ.get("WindowsSDKVersion", "").rstrip("\\")
+                        if not win_sdk_ver:
+                            sdk_inc = os.path.join(win_sdk_root, "Include")
+                            if os.path.isdir(sdk_inc):
+                                for sv in sorted(os.listdir(sdk_inc), reverse=True):
+                                    if os.path.isdir(os.path.join(sdk_inc, sv, "ucrt")):
+                                        win_sdk_ver = sv
+                                        break
+                        if win_sdk_ver:
+                            sdk_inc_ucrt = os.path.join(win_sdk_root, "Include", win_sdk_ver, "ucrt")
+                            sdk_inc_um = os.path.join(win_sdk_root, "Include", win_sdk_ver, "um")
+                            sdk_inc_shared = os.path.join(win_sdk_root, "Include", win_sdk_ver, "shared")
+                            sdk_lib_ucrt = os.path.join(win_sdk_root, "Lib", win_sdk_ver, "ucrt", "x64")
+                            sdk_lib_um = os.path.join(win_sdk_root, "Lib", win_sdk_ver, "um", "x64")
+                            sdk_bin = os.path.join(win_sdk_root, "bin", win_sdk_ver, "x64")
+                            build_env["INCLUDE"] += ";" + ";".join([sdk_inc_ucrt, sdk_inc_um, sdk_inc_shared])
+                            build_env["LIB"] += ";" + ";".join([sdk_lib_ucrt, sdk_lib_um])
+                            build_env["PATH"] = sdk_bin + os.pathsep + build_env["PATH"]
+                        break
+
     print(f"Executing {pyside_build_args}")
-    subprocess.run(pyside_build_args).check_returncode()
+    subprocess.run(pyside_build_args, env=build_env).check_returncode()
 
     generator_cleanup_args = python_interpreter_args + [
         "-m",
