@@ -1,19 +1,21 @@
-# OpenRV Build Workbench History (Windows 10/11)
+# OpenRV ビルド作業履歴 (Windows 10/11)
 
 ---
 
-## Session 4: 2026-04-12 — OCIO Display 黒画面バグ修正 ✅
+## セッション 4: 2026-04-12 — OCIO Display 黒画面バグ修正 ✅
 
-**Result:** ACES 2.0 Output Transform が GPU で正常動作。sRGB / Rec.1886 / P3 等すべての display で
-ACES 2.0 SDR/HDR ビューが正しく表示されることを確認。
+**結果:** ACES 2.0 Output Transform が GPU で正常動作。sRGB / Rec.1886 / P3 等すべての
+ディスプレイで ACES 2.0 SDR/HDR ビューが正しく表示されることを確認。
 
 ### 問題
+
 OCIO Display → ACES 2.0 系ビュー (SDR/HDR) を選択すると画面が真っ黒になる。
 Raw / Un-tone-mapped は正常表示。CPU プロセッサは正常動作確認済み。
 
-### 原因分析 (シェーダーデバッグログ `d:\tmp\rv_shader_debug.log` より)
+### 原因分析（シェーダーデバッグログ `d:\tmp\rv_shader_debug.log` より）
 
 ASSIGNMENTS セクションで LUT サンプラーのバインドが `-1` になっている：
+
 ```
 1 / -1 -> GPU Processor: ...|ocio_gamut_cusp_table_0Sampler ()
 2 / -1 -> GPU Processor: ...|ocio_reach_m_table_0Sampler ()
@@ -21,30 +23,30 @@ ASSIGNMENTS セクションで LUT サンプラーのバインドが `-1` にな
 
 **根本原因：OCIO 2.x GLSL グローバル uniform とバインディングの名前ミスマッチ**
 
-OCIO 2.x が生成する GLSL は：
+OCIO 2.x が生成する GLSL の構造：
 1. グローバル uniform として LUT サンプラーを宣言: `uniform sampler1D ocio_gamut_cusp_table_0Sampler;`
 2. ヘルパー関数がこのグローバルを直接使用: `ocio_reach_m_table_0_sample747b830a()` 等
-3. メイン OCIO 関数は引数としてサンプラーを受け取る（が、ヘルパーはグローバルを使う）
+3. メイン OCIO 関数は引数としてサンプラーを受け取る（がヘルパーはグローバルを使う）
 
-`shaderAddLutAsParameter()` でサンプラーをメイン OCIO 関数のパラメータに追加→ OpenRV の
-シェーダーコンパイルで hash suffix (`747b830a`) が付き `ocio_gamut_cusp_table_0Sampler747b830a`
-になる → メインシェーダーで `_1` カウンタが付き `ocio_gamut_cusp_table_0Sampler747b830a_1`
-としてバインドマップに登録される。
+`shaderAddLutAsParameter()` でサンプラーをメイン OCIO 関数のパラメータに追加 →
+OpenRV のシェーダーコンパイルで ハッシュサフィックス (`747b830a`) が付き
+`ocio_gamut_cusp_table_0Sampler747b830a` になる → メインシェーダーで `_1` カウンタが付き
+`ocio_gamut_cusp_table_0Sampler747b830a_1` としてバインドマップに登録される。
 
-しかし OpenGL ドライバが判定：
-- `ocio_gamut_cusp_table_0Sampler747b830a` (サブシェーダのグローバル) → **ACTIVE** (ヘルパー関数が使用)
-- `ocio_gamut_cusp_table_0Sampler747b830a_1` (メインシェーダ `_1` 付き) → **NOT ACTIVE** (パラメータとして渡されるが実際には使われない)
+しかし OpenGL ドライバの判定：
+- `ocio_gamut_cusp_table_0Sampler747b830a`（サブシェーダのグローバル）→ **有効**（ヘルパー関数が使用）
+- `ocio_gamut_cusp_table_0Sampler747b830a_1`（メインシェーダ `_1` 付き）→ **無効**（パラメータとして渡されるが実際には使われない）
 
 `Program::bind2()` で `uniformLocation("ocio_gamut_cusp_table_0Sampler747b830a_1")` → `-1`
-→ バインドスキップ → LUT テクスチャが未バインド → デフォルト texture unit 0 (画像) を参照
+→ バインドスキップ → LUT テクスチャが未バインド → デフォルト texture unit 0（画像）を参照
 → ACES 2.0 トーンマッピング計算が壊れ → 黒画面
 
 ### 修正内容
 
 **ファイル:** `src/lib/ip/IPCore/ShaderProgram.cpp` — `Program::bind2()`
 
-`uniformLocation(name_with_N_suffix)` が -1 を返した場合、末尾の `_N`（数字のみ）を
-除いたベース名でも検索するフォールバックを追加。
+`uniformLocation(名前_N)` が -1 を返した場合、末尾の `_N`（数字のみ）を除いた
+ベース名でも検索するフォールバックを追加。
 
 ```cpp
 if (location == -1)
@@ -63,83 +65,82 @@ if (location == -1)
 }
 ```
 
-- `ocio_gamut_cusp_table_0Sampler747b830a_1` → -1 → strip `_1` →
-  `ocio_gamut_cusp_table_0Sampler747b830a` → **ACTIVE uniform 発見** → テクスチャユニットにバインド
+- `ocio_gamut_cusp_table_0Sampler747b830a_1` → -1 → `_1` を除去 →
+  `ocio_gamut_cusp_table_0Sampler747b830a` → **有効な uniform 発見** → テクスチャユニットにバインド
 
-### 動作確認 (2026-04-12)
+### 動作確認（2026-04-12）
 
-- View → OCIO Display → sRGB - Display → ACES 2.0 - SDR 100 nits (Rec.709) → **正常表示** ✅
+- ビュー → OCIO Display → sRGB - Display → ACES 2.0 - SDR 100 nits (Rec.709) → **正常表示** ✅
 
-### Commit
+### コミット
 
 ```
-fix: Bind OCIO 2.x 1D LUT global sampler uniforms for ACES 2.0 GPU display
+b9d9beee fix: Bind OCIO 2.x 1D LUT global sampler uniforms for ACES 2.0 GPU display
 ```
 
 ### 変更ファイル
 
-- `src/lib/ip/IPCore/ShaderProgram.cpp` — fallback uniform lookup (+ `#include <algorithm>`)
+- `src/lib/ip/IPCore/ShaderProgram.cpp` — フォールバック uniform 検索を追加（`#include <algorithm>` も追加）
 
 ---
 
-## Session 3: 2026-04-12 — Boost wrapper hardened + end-to-end verified ✅
+## セッション 3: 2026-04-12 — Boost ラッパー強化・エンドツーエンド検証 ✅
 
-**Result:** Clean-rebuild persistence test of Boost VS 2025 wrapper passed.
-Wrapper now survives the full `cmake --build` → MSBuild → `cmd /c bootstrap.bat`
-pipeline without leaked VC environment variables.
+**結果:** Boost VS 2025 ラッパーのクリーンビルド持続性テスト通過。
+`cmake --build` → MSBuild → `cmd /c bootstrap.bat` のパイプライン全体を通じて
+VC 環境変数のリークなしで動作することを確認。
 
-### Boost end-to-end persistence test
+### Boost エンドツーエンド持続性テスト
 
-Wiped `_build/RV_DEPS_BOOST/{src,install}` + all ExternalProject stamps, then
-rebuilt via `cmake --build _build --config Release --target RV_DEPS_BOOST`.
+`_build/RV_DEPS_BOOST/{src,install}` と全 ExternalProject スタンプを削除し、
+`cmake --build _build --config Release --target RV_DEPS_BOOST` で再ビルド。
 
-**Attempt 1 — FAILED:** `'"cl"' is not recognized as an internal or external command`
+**試行 1 — 失敗:** `'"cl"' is not recognized as an internal or external command`
 
-- **Root cause:** `vcvarsall.bat` (VS 2025) checks the `VSCMD_VER` sentinel variable.
-  When invoked via MSYS2 bash → `cmake --build` → MSBuild → `cmake -P` → `cmd /c
-  bootstrap.bat`, the parent shell's `VSCMD_VER` was inherited. vcvarsall.bat saw
-  the sentinel and exited early without setting up PATH/INCLUDE/LIB. Since the wrapper
-  had already scrubbed PATH to a minimal set (no cl.exe), build.bat could not find
-  the compiler.
+- **原因:** `vcvarsall.bat`（VS 2025）は `VSCMD_VER` センチネル変数を確認する。
+  MSYS2 bash → `cmake --build` → MSBuild → `cmake -P` → `cmd /c bootstrap.bat`
+  という経路で呼び出した場合、親シェルの `VSCMD_VER` が継承される。
+  vcvarsall.bat はセンチネルを検出して PATH/INCLUDE/LIB のセットアップを行わずに終了。
+  ラッパーが PATH を最小限に絞っていたため（cl.exe なし）、build.bat がコンパイラを見つけられなかった。
 
-**Attempt 2 — FAILED:** `LINK : fatal error LNK1158: cannot run 'mt.exe'`
+**試行 2 — 失敗:** `LINK : fatal error LNK1158: cannot run 'mt.exe'`
 
-- **Root cause:** After clearing the sentinels and pre-injecting cl.exe's directory
-  into PATH, compilation succeeded but linking b2.exe with `/MANIFEST:EMBED` required
-  `mt.exe` (Manifest Tool) from the Windows SDK x64 bin directory, which was not on
-  the scrubbed PATH.
+- **原因:** センチネルを削除して cl.exe のディレクトリを PATH に事前注入した後、
+  コンパイルは成功したが、b2.exe を `/MANIFEST:EMBED` でリンクする際に
+  Windows SDK x64 bin ディレクトリの `mt.exe`（マニフェストツール）が必要で、
+  スクラブ後の PATH に含まれていなかった。
 
-**Attempt 3 — PASSED:**
+**試行 3 — 成功:**
 
-- Added Windows SDK x64 bin auto-detection: the wrapper now globs
-  `C:/Program Files (x86)/Windows Kits/10/bin/10.*/x64/mt.exe` and picks the
-  highest-versioned SDK directory.
-- Final scrubbed PATH: `<MSVC bin>;<SDK x64 bin>;C:\Windows\System32;...`
-- b2.exe linked successfully, project-config.jam overwritten with explicit
-  `<setup>"...vcvarsall.bat"`, all 15 Boost libs built and installed.
+- Windows SDK x64 bin の自動検出を追加: ラッパーが
+  `C:/Program Files (x86)/Windows Kits/10/bin/10.*/x64/mt.exe` を glob して
+  バージョンが最も高い SDK ディレクトリを選択する。
+- スクラブ後の最終 PATH: `<MSVC bin>;<SDK x64 bin>;C:\Windows\System32;...`
+- b2.exe のリンク成功、project-config.jam に明示的な `<setup>"...vcvarsall.bat"` を書き込み、
+  Boost の全 15 ライブラリをビルド・インストール完了。
 
-### Verification
+### 検証
 
 ```
-_build/RV_DEPS_BOOST/install/lib/  →  15 .dll + 15 .lib (30 files + cmake/)
+_build/RV_DEPS_BOOST/install/lib/  →  15 .dll + 15 .lib（30 ファイル + cmake/）
 project-config.jam  →  using msvc : 14.3 : "...cl.exe" : <setup>"...vcvarsall.bat" ;
-ExternalProject stamp  →  RV_DEPS_BOOST-complete created
+ExternalProject スタンプ  →  RV_DEPS_BOOST-complete 作成済み
 ```
 
-### Changes to `boost_bootstrap_vs2025.cmake`
+### `boost_bootstrap_vs2025.cmake` への変更点
 
-1. Pre-inject MSVC cl.exe directory into scrubbed PATH (was missing before)
-2. Auto-detect and inject Windows SDK x64 bin (mt.exe, rc.exe) into scrubbed PATH
-3. Clear vcvarsall.bat sentinels: `VSCMD_VER`, `VSINSTALLDIR`, `VCINSTALLDIR`,
+1. MSVC cl.exe ディレクトリをスクラブ後の PATH に事前注入（以前は欠落していた）
+2. Windows SDK x64 bin（mt.exe, rc.exe）を自動検出して PATH に注入
+3. vcvarsall.bat センチネル変数を削除: `VSCMD_VER`, `VSINSTALLDIR`, `VCINSTALLDIR`,
    `DevEnvDir`, `VCToolsVersion`
 
-### Commit
+### コミット
 
 ```
 e9ae9a79 build: Harden Boost VS 2025 bootstrap wrapper for clean environments
 ```
 
-### All commits (cumulative)
+### 累積コミット一覧
 
 ```
 e9ae9a79 build: Harden Boost VS 2025 bootstrap wrapper for clean environments
@@ -149,38 +150,38 @@ d7bf0827 build: Add VS 2025 environment handling for Python/PySide (VFX-CY2025)
 
 ---
 
-## Session 2: 2026-04-11 — CY2025 build COMPLETED ✅
+## セッション 2: 2026-04-11 — CY2025 ビルド完了 ✅
 
-**Result:** Full successful build of OpenRV 3.1.0 on VS 2025 / VFX CY2025.  
-`rv.exe -version` → `3.1.0`. `cmake --install` install tree at `_install/`.
+**結果:** OpenRV 3.1.0 を VS 2025 / VFX CY2025 環境でフルビルドに成功。
+`rv.exe -version` → `3.1.0`。`cmake --install` によるインストールツリーを `_install/` に作成。
 
-### Environment (changed from Session 1)
+### 環境（セッション 1 から変更あり）
 
-| Component | Version | Path |
+| コンポーネント | バージョン | パス |
 |---|---|---|
 | OS | Windows 10 Pro 10.0.19045 | - |
 | Visual Studio | 2025 (v18.4) Community | D:\Program Files\Microsoft Visual Studio\18\Community |
-| MSVC Toolchains | v143 14.44.35207, **14.50.35717** | VS dir/VC/Tools/MSVC/ |
+| MSVC ツールチェーン | v143 14.44.35207, **14.50.35717** | VS dir/VC/Tools/MSVC/ |
 | CMake | 4.2.3 | C:\Program Files\CMake\bin |
-| **Python (host)** | **3.11.9** | **C:\Python311** |
+| **Python（ホスト）** | **3.11.9** | **C:\Python311** |
 | **Qt** | **6.5.3 msvc2019_64** | **D:\Qt\6.5.3\msvc2019_64** |
 | Rust | 1.94.0 | ~/.cargo/bin |
-| Strawberry Perl | installed | C:\Strawberry\perl\bin |
-| MSYS2 | installed | C:\msys64 |
+| Strawberry Perl | インストール済み | C:\Strawberry\perl\bin |
+| MSYS2 | インストール済み | C:\msys64 |
 
-### Decision: Switch CY2023 → CY2025
+### 判断: CY2023 → CY2025 へ切り替え
 
-The CY2023 attempt was blocked on PySide2 + VS 2025 incompatibility (see Session 1
-archive below). PySide2's libclang-release_140-based ApiExtractor fails to parse Qt 5.15
-headers against the Windows 10.0.26100 SDK bundled with VS 2025. The fix would require
-shipping a newer libclang or running VS 2022 side-by-side.
+CY2023 の試みは PySide2 と VS 2025 の非互換性でブロックされた（セッション 1 参照）。
+PySide2 の libclang-release_140 ベースの ApiExtractor が、VS 2025 に同梱された
+Windows 10.0.26100 SDK に対して Qt 5.15 ヘッダーを解析できない。
+修正には新しい libclang の導入か VS 2022 との並列インストールが必要となる。
 
-Instead switched to **VFX CY2025** (experimentally supported per OpenRV docs):
-- PySide6 replaces PySide2 — far more compatible with modern toolchains
-- Qt 6.5.3, Python 3.11.9, Boost 1.85.0, OCIO 2.4.2, OIIO 3.1.x, OpenEXR 3.3.x
-- Installed Qt 6.5.3 via aqtinstall to `D:\Qt\6.5.3\msvc2019_64`
+代わりに **VFX CY2025**（OpenRV ドキュメントに実験的サポートと記載）へ切り替え：
+- PySide2 → PySide6（最新ツールチェーンとの互換性が大幅に向上）
+- Qt 6.5.3、Python 3.11.9、Boost 1.85.0、OCIO 2.4.2、OIIO 3.1.x、OpenEXR 3.3.x
+- Qt 6.5.3 を aqtinstall で `D:\Qt\6.5.3\msvc2019_64` へインストール
 
-### CMake reconfigure for CY2025
+### CY2025 向け CMake 再設定
 
 ```bash
 cmake -B _build -G "Visual Studio 18 2026" -A x64 \
@@ -191,82 +192,86 @@ cmake -B _build -G "Visual Studio 18 2026" -A x64 \
   -DRV_DEPS_WIN_PERL_ROOT="C:/Strawberry/perl/bin"
 ```
 
-Note: dropped explicit `-T v143,version=14.44` — VS 2025 default toolset (14.50) used
-by all CMake sub-projects. Boost still uses 14.3/14.44 via explicit `<setup>` (see below).
+注: `-T v143,version=14.44` の明示指定を削除。全 CMake サブプロジェクトで
+VS 2025 デフォルトツールセット（14.50）を使用。Boost のみ明示的な `<setup>` で
+14.3/14.44 を継続使用（下記参照）。
 
-### VS 2025 problems encountered and fixes
+### VS 2025 で発生した問題と修正
 
-#### A. Boost bootstrap.bat — vcvarsall.bat not found (b2 fails)
+#### A. Boost bootstrap.bat — vcvarsall.bat が見つからない（b2 が失敗）
 
-- **Symptom:** `b2` errors: `don't know how to make ...HostX64\vcvarsall.bat`
-- **Root cause:** Boost.Build's `msvc.jam` 14.3 computes `vcvarsall.bat` path from
-  cl.exe's grandparent + `../../../../../Auxiliary/Build`. For the VS 2025 layout
-  (`VC/Tools/MSVC/14.44.35207/bin/HostX64/x64/cl.exe`) this resolves wrongly.
-  Additionally `bootstrap.bat`'s `set "VS170COMNTOOLS=...Tools\"` had a trailing
-  backslash that cmd.exe parsed as an escaped quote → `\Common was unexpected at this time`.
-- **Fix (in _build, not persisted):** Patched `_build/RV_DEPS_BOOST/src/bootstrap.bat`:
-  - Removed trailing backslash from `VS170COMNTOOLS` value
-  - Added explicit `<setup>"...vcvarsall.bat"` to the `using msvc : 14.3 : ...` line in `project-config.jam`
-- **Fix (persisted — committed):** Added `cmake/dependencies/patch/boost_bootstrap_vs2025.cmake`
-  (a `cmake -P` script that scrubs PATH, sets VS170COMNTOOLS correctly, runs stock
-  `bootstrap.bat`, then overwrites `project-config.jam` with explicit `<setup>`).
-  `cmake/dependencies/boost.cmake` now detects VS 2025+ by `CMAKE_GENERATOR_INSTANCE`
-  segment (e.g. `/Visual Studio/18/`) and swaps `CONFIGURE_COMMAND` to invoke the
-  wrapper. VS 2022 (`/2022/` segment) is unaffected.
-- **Commit:** `1fdc3d5f build: Add VS 2025 bootstrap workaround for Boost (VFX-CY2025)`
+- **症状:** `b2` エラー: `don't know how to make ...HostX64\vcvarsall.bat`
+- **原因:** Boost.Build の `msvc.jam` 14.3 が cl.exe の祖父ディレクトリ +
+  `../../../../../Auxiliary/Build` から `vcvarsall.bat` のパスを計算する。
+  VS 2025 のレイアウト（`VC/Tools/MSVC/14.44.35207/bin/HostX64/x64/cl.exe`）では
+  このパス解決が正しく行われない。また `bootstrap.bat` の
+  `set "VS170COMNTOOLS=...Tools\"` の末尾バックスラッシュを cmd.exe がエスケープされた
+  クォートと解釈し `\Common was unexpected at this time` エラーが発生。
+- **修正（_build 内、非永続）:** `_build/RV_DEPS_BOOST/src/bootstrap.bat` を直接パッチ:
+  - `VS170COMNTOOLS` の値から末尾バックスラッシュを削除
+  - `project-config.jam` の `using msvc : 14.3 : ...` 行に明示的な
+    `<setup>"...vcvarsall.bat"` を追加
+- **修正（永続化・コミット済み）:** `cmake/dependencies/patch/boost_bootstrap_vs2025.cmake`
+  を追加（PATH をスクラブして VS170COMNTOOLS を正しく設定し、標準 `bootstrap.bat` を
+  実行してから明示的な `<setup>` で `project-config.jam` を上書きする `cmake -P` スクリプト）。
+  `cmake/dependencies/boost.cmake` が `CMAKE_GENERATOR_INSTANCE` のセグメント
+  （例: `/Visual Studio/18/`）で VS 2025 以降を検出し `CONFIGURE_COMMAND` を
+  ラッパー呼び出しに切り替える。VS 2022（`/2022/` セグメント）は影響なし。
+- **コミット:** `1fdc3d5f build: Add VS 2025 bootstrap workaround for Boost (VFX-CY2025)`
 
-#### B. Python/PySide6 build — wrong python3, vcvarsall.bat, MAX_PATH, pip source builds
+#### B. Python/PySide6 ビルド — python3 パス、vcvarsall.bat、MAX_PATH、pip ソースビルド
 
-- **Problem B1 (wrong python):** CMake `ADD_CUSTOM_COMMAND` used bare `python3`,
-  resolved at build time to WindowsApps stub or MSYS2 python instead of venv.
-- **Fix B1:** `cmake/dependencies/python3.cmake` now resolves `python3` absolutely at
-  configure time (venv first, then `FIND_PROGRAM`).
+- **問題 B1（python3 のパス解決が不正）:** CMake の `ADD_CUSTOM_COMMAND` が
+  bare の `python3` を使用し、ビルド時に WindowsApps スタブや MSYS2 python に
+  解決されてしまう。
+- **修正 B1:** `cmake/dependencies/python3.cmake` で設定時に `python3` を絶対パスに解決
+  （venv を優先し、次に `FIND_PROGRAM` を使用）。
 
-- **Problem B2 (DISTUTILS vcvarsall):** `pip` native-extension builds call
-  vcvarsall.bat from the MSBuild subprocess context, which fails on VS 2025.
-- **Fix B2:** Set `DISTUTILS_USE_SDK=1`, `MSSdk=1` in pip environment.
+- **問題 B2（DISTUTILS の vcvarsall）:** pip のネイティブ拡張ビルドが MSBuild の
+  サブプロセスコンテキストから vcvarsall.bat を呼び出し、VS 2025 では失敗する。
+- **修正 B2:** pip 環境に `DISTUTILS_USE_SDK=1`、`MSSdk=1` を設定。
 
-- **Problem B3 (MAX_PATH with opentimelineio):** pip's FileTracker tlog files for
-  opentimelineio exceed MAX_PATH under the default `%TEMP%`.
-- **Fix B3:** Set `TMPDIR=TEMP=TMP=<repo>/../_rvtmp` for pip invocations.
+- **問題 B3（opentimelineio の MAX_PATH 超過）:** デフォルトの `%TEMP%` 配下で
+  opentimelineio の pip FileTracker tlog ファイルが MAX_PATH を超過する。
+- **修正 B3:** pip 呼び出し時に `TMPDIR=TEMP=TMP=<リポジトリ>/../_rvtmp` を設定。
 
-- **Problem B4 (cffi/cryptography/pydantic built from source):** These were not in
-  `RV_PYTHON_WHEEL_SAFE`, so pip compiled them — which fails on VS 2025 without
-  extra setup.
-- **Fix B4:** Added cffi, cryptography, pydantic, pydantic-core to `RV_PYTHON_WHEEL_SAFE`.
+- **問題 B4（cffi/cryptography/pydantic のソースビルド）:** これらが
+  `RV_PYTHON_WHEEL_SAFE` に含まれておらず、pip がソースコンパイルを試みるが
+  VS 2025 では追加設定なしでは失敗する。
+- **修正 B4:** cffi、cryptography、pydantic、pydantic-core を `RV_PYTHON_WHEEL_SAFE` に追加。
 
-- **Problem B5 (PySide6 make_pyside6.py — MSYS2 PATH leakage):** `make_pyside6.py`
-  inherited MSYS2 bash's PATH with Unix-style entries and corrupted tokens, preventing
-  cl.exe/link.exe lookup by PySide6's shiboken subprocess.
-- **Fix B5:** `src/build/make_pyside6.py` now builds a clean `build_env`:
-  scrubs non-Windows-style PATH entries, vswhere-detects VS install, manually sets
-  `INCLUDE`, `LIB`, `PATH` for MSVC + Windows SDK.
-  Same treatment applied to `src/build/make_pyside.py` (CY2023 path, same logic).
+- **問題 B5（PySide6 make_pyside6.py — MSYS2 PATH の混入）:** `make_pyside6.py` が
+  MSYS2 bash の PATH（Unix スタイルのエントリと壊れたトークンを含む）を継承し、
+  PySide6 の shiboken サブプロセスが cl.exe/link.exe を見つけられなくなる。
+- **修正 B5:** `src/build/make_pyside6.py` でクリーンな `build_env` を構築:
+  Windows スタイル以外の PATH エントリを除去し、vswhere で VS インストールを検出して
+  MSVC + Windows SDK の `INCLUDE`、`LIB`、`PATH` を手動設定。
+  `src/build/make_pyside.py`（CY2023/PySide2 パス）にも同様の処理を適用。
 
-- **Commit:** `d7bf0827 build: Add VS 2025 environment handling for Python/PySide (VFX-CY2025)`
+- **コミット:** `d7bf0827 build: Add VS 2025 environment handling for Python/PySide (VFX-CY2025)`
 
-### Build commands (CY2025 succeeded)
+### ビルドコマンド（CY2025 で成功）
 
 ```bash
-# 1. Build all 28 third-party dependencies
+# 1. サードパーティ依存関係 28 本をビルド
 cmake --build _build --config Release --parallel 16 --target dependencies
 
-# 2. Build rv.exe
+# 2. rv.exe をビルド
 cmake --build _build --config Release --parallel 16 --target main_executable
 
-# 3. Create install tree
+# 3. インストールツリーを作成
 cmake --install _build --prefix "D:/GitHub/OpenRV_mdk-build/_install" --config Release
 ```
 
-### Completed dependencies (CY2025)
+### ビルド完了済み依存関係（CY2025）
 
-All 28 ExternalProject stamps present in `_build/cmake/dependencies/CMakeFiles/Release/`:
+`_build/cmake/dependencies/CMakeFiles/Release/` に全 28 個の ExternalProject スタンプが存在:
 
-| Dep | Version |
+| 依存関係 | バージョン |
 |---|---|
 | AJA | 17.6.0 |
 | Atomic Ops | — |
-| Boost | 1.85.0 (15 libs) |
+| Boost | 1.85.0（15 ライブラリ）|
 | Dav1d | 1.4.3 |
 | Doctest | — |
 | Expat | 2.6.3 |
@@ -285,8 +290,8 @@ All 28 ExternalProject stamps present in `_build/cmake/dependencies/CMakeFiles/R
 | OpenSSL | 3.4.x |
 | PCRE2 | — |
 | PNG | — |
-| **Python3** | **3.11.9** (94 libs + full requirements) |
-| **PySide6** | **6.5.3** (30 .pyd files) |
+| **Python3** | **3.11.9**（94 ライブラリ + フル requirements）|
+| **PySide6** | **6.5.3**（30 .pyd ファイル）|
 | PYIMGUI / PYIMPLOT | — |
 | libraw | — |
 | spdlog | — |
@@ -294,55 +299,55 @@ All 28 ExternalProject stamps present in `_build/cmake/dependencies/CMakeFiles/R
 | WebP | — |
 | YAML-CPP | — |
 
-### Build artifacts
+### ビルド成果物
 
-| Artifact | Path | Notes |
+| 成果物 | パス | 備考 |
 |---|---|---|
 | `rv.exe` | `_build/stage/app/bin/rv.exe` | 13 MB |
-| `rvio.exe` etc. | `_build/stage/app/bin/` | All 7 rv tools |
-| Install tree | `_install/` | bin, lib, DLLs, PlugIns, scripts, translations |
+| `rvio.exe` 等 | `_build/stage/app/bin/` | rv ツール全 7 本 |
+| インストールツリー | `_install/` | bin, lib, DLL, PlugIns, scripts, translations |
 
-**Smoke tests (2026-04-11):**
+**スモークテスト（2026-04-11）:**
 - `rv.exe -version` → `3.1.0` ✅
-- `rvio smoke_in.png -o smoke_out.exr` → 512×512 16f EXR, 174 KB ✅
-- `rvio smoke_out.exr -o smoke_round.jpg` → round-trip OK ✅
+- `rvio smoke_in.png -o smoke_out.exr` → 512×512 16f EXR、174 KB ✅
+- `rvio smoke_out.exr -o smoke_round.jpg` → ラウンドトリップ OK ✅
 - `rv.exe -pyeval "from rv import commands; print(commands.frame())"` → `1` ✅
-  (Python + PySide6 + rv.commands C++ bridge all live)
-- MediaLibrary plugins imported, AJADevices.dll loaded, OIIO reads image ✅
+  （Python + PySide6 + rv.commands C++ ブリッジすべて正常動作）
+- MediaLibrary プラグイン読み込み、AJADevices.dll ロード、OIIO 画像読み込み ✅
 
-### Commits
+### コミット
 
 ```
 d7bf0827 build: Add VS 2025 environment handling for Python/PySide (VFX-CY2025)
 1fdc3d5f build: Add VS 2025 bootstrap workaround for Boost (VFX-CY2025)
 ```
 
-Files changed (repo source tree):
-- `cmake/dependencies/boost.cmake` — VS 2025 detection + conditional CONFIGURE_COMMAND
-- `cmake/dependencies/patch/boost_bootstrap_vs2025.cmake` — new wrapper script (b2 bootstrap)
-- `cmake/dependencies/python3.cmake` — host python resolution, DISTUTILS_USE_SDK, short TMPDIR, wheel-safe list
-- `src/build/make_pyside6.py` — clean build_env, vswhere-based VC/SDK injection
-- `src/build/make_pyside.py` — same, for CY2023/PySide2 path
+変更ファイル（リポジトリソースツリー）:
+- `cmake/dependencies/boost.cmake` — VS 2025 検出 + 条件付き CONFIGURE_COMMAND
+- `cmake/dependencies/patch/boost_bootstrap_vs2025.cmake` — 新規ラッパースクリプト（b2 bootstrap）
+- `cmake/dependencies/python3.cmake` — ホスト python 解決、DISTUTILS_USE_SDK、短い TMPDIR、wheel-safe リスト
+- `src/build/make_pyside6.py` — クリーン build_env、vswhere ベースの VC/SDK 注入
+- `src/build/make_pyside.py` — 同上（CY2023/PySide2 パス用）
 
 ---
 
-## Session 1 archive: 2026-04-10 — CY2023 attempt (BLOCKED on PySide2)
+## セッション 1 アーカイブ: 2026-04-10 — CY2023 試行（PySide2 でブロック）
 
-### Environment (Session 1)
+### 環境（セッション 1）
 
-| Component | Version | Path |
+| コンポーネント | バージョン | パス |
 |---|---|---|
 | OS | Windows 10 Pro 10.0.19045 | - |
 | Visual Studio | 2025 (v18.4) Community | D:\Program Files\Microsoft Visual Studio\18\Community |
-| MSVC Toolchains | v143 14.44.35207, 14.50.35717 | VS dir/VC/Tools/MSVC/ |
+| MSVC ツールチェーン | v143 14.44.35207, 14.50.35717 | VS dir/VC/Tools/MSVC/ |
 | CMake | 4.2.3 | C:\Program Files\CMake\bin |
-| Python (host) | 3.10.10 | C:\Users\hiroshi\AppData\Local\Programs\Python\Python310 |
+| Python（ホスト）| 3.10.10 | C:\Users\hiroshi\AppData\Local\Programs\Python\Python310 |
 | Qt | 5.15.2 msvc2019_64 | C:\Qt\5.15.2\msvc2019_64 |
 | Rust | 1.94.0 | ~/.cargo/bin |
-| Strawberry Perl | installed | C:\Strawberry\perl\bin |
-| MSYS2 | installed | C:\msys64 |
+| Strawberry Perl | インストール済み | C:\Strawberry\perl\bin |
+| MSYS2 | インストール済み | C:\msys64 |
 
-CMake configure:
+CMake 設定コマンド:
 ```bash
 cmake -B _build -G "Visual Studio 18 2026" -T v143,version=14.44 -A x64 \
   -DCMAKE_BUILD_TYPE=Release \
@@ -351,25 +356,25 @@ cmake -B _build -G "Visual Studio 18 2026" -T v143,version=14.44 -A x64 \
   -DRV_DEPS_WIN_PERL_ROOT="c:/Strawberry/perl/bin"
 ```
 
-### Problems hit and fixed during CY2023 attempt
+### CY2023 試行中に発生した問題と修正
 
-- **CMake generator:** Overrode to `"Visual Studio 18 2026" -T v143,version=14.44`.
-- **Python 3.10 MSBuild v140 error:** Added `VisualStudioVersion == 18.0 → v143` condition
-  to `_build/RV_DEPS_PYTHON3/src/PCbuild/python.props`.
-- **Python requirements (cffi, opentimelineio, numpy):** Same DISTUTILS_USE_SDK / short
-  TMPDIR / wheel-safe list fixes now captured in the CY2025 commits above.
-- **Boost bootstrap.bat:** Patched `call build.bat vc143` (in-place, not persisted).
-- **PySide2 jom:** Installed jom 1.1.4 to `tools/jom/` and
-  `C:\Qt\Tools\QtCreator\bin\jom\jom.exe`.
-- **PySide2 `init_msvc_env`:** Patched `_build/_deps/rv_deps_pyside2-src/build_scripts/utils.py`
-  to return early when `DISTUTILS_USE_SDK` is set.
-- **PySide2 cmake_minimum_required:** Patched 9 nested CMakeLists.txt from 3.1 → 3.5
-  (CMake 4 dropped compatibility with < 3.5).
+- **CMake ジェネレーター:** `"Visual Studio 18 2026" -T v143,version=14.44` に変更。
+- **Python 3.10 MSBuild v140 エラー:** `_build/RV_DEPS_PYTHON3/src/PCbuild/python.props` に
+  `VisualStudioVersion == 18.0 → v143` の条件を追加。
+- **Python 要件（cffi、opentimelineio、numpy）:** DISTUTILS_USE_SDK / 短い TMPDIR /
+  wheel-safe リストの修正は CY2025 のコミットに統合済み。
+- **Boost bootstrap.bat:** `call build.bat vc143` をインプレースでパッチ（非永続）。
+- **PySide2 jom:** jom 1.1.4 を `tools/jom/` と
+  `C:\Qt\Tools\QtCreator\bin\jom\jom.exe` にインストール。
+- **PySide2 `init_msvc_env`:** `_build/_deps/rv_deps_pyside2-src/build_scripts/utils.py` を
+  `DISTUTILS_USE_SDK` が設定されている場合に早期 return するようパッチ。
+- **PySide2 cmake_minimum_required:** ネストされた CMakeLists.txt 9 ファイルを
+  3.1 → 3.5 に変更（CMake 4 が 3.5 未満との互換性を廃止したため）。
 
-### CY2023 blocker (reason for switching)
+### CY2023 のブロック要因（切り替えの理由）
 
-After all the above patches, `shiboken2` itself built and linked, but the per-module
-ApiExtractor code-generation step crashed for every Qt module:
+上記すべてのパッチ適用後、`shiboken2` 自体のビルドとリンクは成功したが、
+各 Qt モジュールのモジュール別 ApiExtractor コード生成ステップがクラッシュ:
 
 ```
 shiboken: Error running ApiExtractor.
@@ -377,14 +382,15 @@ shiboken: Error running ApiExtractor.
 --include-paths=.../Qt/5.15.2/msvc2019_64/include/...
 ```
 
-The pre-built `libclang-release_140-based-windows-vs2019_64.7z` (bundled with PySide2)
-is too old to parse Qt 5.15 headers against the Windows 10.0.26100 SDK shipped with
-VS 2025. No straightforward fix without either:
-- A newer libclang (release_160 or _170)
-- VS 2022 v14.40 side-by-side with VS 2025
-- **→ Chose Option C: switch to CY2025 + PySide6** (see Session 2 above)
+PySide2 に同梱されたビルド済み
+`libclang-release_140-based-windows-vs2019_64.7z` が古すぎて、
+VS 2025 に同梱された Windows 10.0.26100 SDK に対して Qt 5.15 ヘッダーを解析できない。
+根本的な修正には以下のいずれかが必要:
+- 新しい libclang（release_160 または _170）
+- VS 2022 v14.40 の VS 2025 との並列インストール
+- **→ 選択肢 C: CY2025 + PySide6 へ切り替え**（セッション 2 参照）
 
-### Local tools (Session 1)
+### ローカルツール（セッション 1）
 
-- `tools/jom/jom.exe` — jom 1.1.4 (also copied to Qt's expected path)
-- `tools/llvm/` — libclang bits accumulated while investigating the ApiExtractor crash
+- `tools/jom/jom.exe` — jom 1.1.4（Qt の期待するパスにもコピー済み）
+- `tools/llvm/` — ApiExtractor クラッシュ調査中に収集した libclang 関連ファイル
