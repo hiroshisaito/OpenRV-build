@@ -17,10 +17,52 @@ IF(NOT SRC_DIR OR NOT CL_EXE OR NOT VCVARSALL OR NOT VS_COMNTOOLS)
   MESSAGE(FATAL_ERROR "boost_bootstrap_vs2025.cmake: SRC_DIR, CL_EXE, VCVARSALL, VS_COMNTOOLS are required")
 ENDIF()
 
+# Pre-inject the MSVC cl.exe directory AND the Windows SDK bin directory
+# (for mt.exe, rc.exe) into a clean PATH before calling bootstrap.bat. We
+# cannot rely on vcvarsall.bat alone: VS 2025's vcvarsall.bat checks
+# VSCMD_VER and skips PATH setup when it detects the VC environment was
+# already initialised by a parent shell, and even when it runs to completion
+# Boost's build.bat links b2.exe via `/MANIFEST:EMBED` which requires
+# mt.exe on PATH.
+GET_FILENAME_COMPONENT(_cl_dir "${CL_EXE}" DIRECTORY)
+STRING(REPLACE "/" "\\" _cl_dir_win "${_cl_dir}")
+
+# Locate the highest-versioned Windows 10/11 SDK x64 bin directory that
+# ships mt.exe (needed by link.exe /MANIFEST:EMBED).
+SET(_winkits_root "C:/Program Files (x86)/Windows Kits/10/bin")
+SET(_sdk_bin_win "")
+IF(EXISTS "${_winkits_root}")
+  FILE(GLOB _sdk_versions RELATIVE "${_winkits_root}" "${_winkits_root}/10.*")
+  IF(_sdk_versions)
+    LIST(SORT _sdk_versions)
+    LIST(REVERSE _sdk_versions)
+    FOREACH(_sdk_ver ${_sdk_versions})
+      IF(EXISTS "${_winkits_root}/${_sdk_ver}/x64/mt.exe")
+        SET(_sdk_bin "${_winkits_root}/${_sdk_ver}/x64")
+        STRING(REPLACE "/" "\\" _sdk_bin_win "${_sdk_bin}")
+        MESSAGE(STATUS "boost_bootstrap_vs2025: using Windows SDK bin ${_sdk_bin}")
+        BREAK()
+      ENDIF()
+    ENDFOREACH()
+  ENDIF()
+ENDIF()
+IF(NOT _sdk_bin_win)
+  MESSAGE(FATAL_ERROR "boost_bootstrap_vs2025: could not locate a Windows 10/11 SDK x64 bin directory with mt.exe under ${_winkits_root}")
+ENDIF()
+
 # Scrub PATH: MSYS2 / Git-bash sometimes plants non-path text in PATH (e.g.
 # "'C;...' -> '\\etc\\hosts'") which breaks cmd.exe's SET parser when
 # vcvarsall.bat walks the environment.
-SET(ENV{PATH} "C:\\Windows\\System32;C:\\Windows;C:\\Windows\\System32\\Wbem")
+# Prepend MSVC bin + SDK bin so cl.exe, link.exe, and mt.exe are available.
+SET(ENV{PATH} "${_cl_dir_win};${_sdk_bin_win};C:\\Windows\\System32;C:\\Windows;C:\\Windows\\System32\\Wbem")
+
+# Clear vcvarsall.bat "already initialised" sentinels so it actually sets up
+# INCLUDE/LIB/PATH for the correct toolset instead of returning early.
+SET(ENV{VSCMD_VER} "")
+SET(ENV{VSINSTALLDIR} "")
+SET(ENV{VCINSTALLDIR} "")
+SET(ENV{DevEnvDir} "")
+SET(ENV{VCToolsVersion} "")
 
 # Let bat files find sibling scripts via implicit-cwd lookup (Boost's
 # build.bat -> config_toolset.bat / guess_toolset.bat).
