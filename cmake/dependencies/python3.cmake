@@ -85,11 +85,25 @@ FETCHCONTENT_DECLARE(
 
 FETCHCONTENT_MAKEAVAILABLE(${_pyside_target})
 
+# Resolve the full path to python3 at configure time to avoid MSBuild picking up
+# the wrong python3 (e.g. WindowsApps stub or MSYS2 python) at build time.
+# Use the venv python if available, otherwise search PATH.
+IF(EXISTS "${PROJECT_SOURCE_DIR}/.venv/Scripts/python.exe")
+  SET(_rv_python3_host_exe "${PROJECT_SOURCE_DIR}/.venv/Scripts/python.exe")
+ELSEIF(EXISTS "${PROJECT_SOURCE_DIR}/.venv/Scripts/python3.exe")
+  SET(_rv_python3_host_exe "${PROJECT_SOURCE_DIR}/.venv/Scripts/python3.exe")
+ELSEIF(EXISTS "${PROJECT_SOURCE_DIR}/.venv/bin/python3")
+  SET(_rv_python3_host_exe "${PROJECT_SOURCE_DIR}/.venv/bin/python3")
+ELSE()
+  FIND_PROGRAM(_rv_python3_host_exe NAMES python3 python REQUIRED)
+ENDIF()
+MESSAGE(STATUS "Host Python3 for build scripts: ${_rv_python3_host_exe}")
+
 SET(_python3_make_command_script
     "${PROJECT_SOURCE_DIR}/src/build/make_python.py"
 )
 SET(_python3_make_command
-    python3 "${_python3_make_command_script}"
+    "${_rv_python3_host_exe}" "${_python3_make_command_script}"
 )
 LIST(APPEND _python3_make_command "--variant")
 LIST(APPEND _python3_make_command ${CMAKE_BUILD_TYPE})
@@ -117,7 +131,7 @@ IF(RV_VFX_PLATFORM STREQUAL CY2023)
       "${PROJECT_SOURCE_DIR}/src/build/make_pyside.py"
   )
   SET(_pyside_make_command
-      python3 "${_pyside_make_command_script}"
+      "${_rv_python3_host_exe}" "${_pyside_make_command_script}"
   )
 
   LIST(APPEND _pyside_make_command "--variant")
@@ -145,7 +159,7 @@ ELSEIF(RV_VFX_PLATFORM STRGREATER_EQUAL CY2024)
       "${PROJECT_SOURCE_DIR}/src/build/make_pyside6.py"
   )
   SET(_pyside_make_command
-      python3 "${_pyside_make_command_script}"
+      "${_rv_python3_host_exe}" "${_pyside_make_command_script}"
   )
 
   LIST(APPEND _pyside_make_command "--variant")
@@ -306,6 +320,10 @@ SET(RV_PYTHON_WHEEL_SAFE
     "pathspec" # Gitignore pattern matching (pure Python)
     "trove-classifiers" # PyPI classifiers data (pure Python)
     "vcs-versioning" # VCS version detection for setuptools-scm 10.x (pure Python)
+    "cffi" # C Foreign Function Interface - binary wheel avoids vcvarsall.bat issues on VS 2025
+    "cryptography" # Cryptographic recipes - binary wheel avoids build dependency on cffi source build
+    "pydantic" # Data validation - binary wheel for compatibility with VS 2025
+    "pydantic-core" # Pydantic Rust core - binary wheel for compatibility
     CACHE STRING "Packages safe to install from wheels (pure Python or build tools)"
 )
 
@@ -328,8 +346,21 @@ SET(_build_deps_install_command
 )
 
 # Phase 2: Install main requirements (with build-from-source for native extensions)
+# On Windows, set DISTUTILS_USE_SDK=1 so setuptools uses the current VC environment
+# instead of calling vcvarsall.bat (which can fail from MSYS2/Git Bash contexts).
+# Also set TMPDIR/TEMP/TMP to a short path to avoid Windows MAX_PATH issues with
+# FileTracker tlog files during pip builds of packages like opentimelineio.
+IF(RV_TARGET_WINDOWS)
+  # Use drive root temp dir to keep paths very short (avoid MAX_PATH with FileTracker tlog files)
+  SET(_short_tmp_dir "${CMAKE_SOURCE_DIR}/../_rvtmp")
+  FILE(MAKE_DIRECTORY "${_short_tmp_dir}")
+  GET_FILENAME_COMPONENT(_short_tmp_dir "${_short_tmp_dir}" ABSOLUTE)
+  SET(_distutils_sdk_env "DISTUTILS_USE_SDK=1" "MSSdk=1" "TMPDIR=${_short_tmp_dir}" "TEMP=${_short_tmp_dir}" "TMP=${_short_tmp_dir}")
+ELSE()
+  SET(_distutils_sdk_env "")
+ENDIF()
 SET(_requirements_install_command
-    ${CMAKE_COMMAND} -E env ${_otio_debug_env} ${_sdkroot_env}
+    ${CMAKE_COMMAND} -E env ${_otio_debug_env} ${_sdkroot_env} ${_distutils_sdk_env}
 )
 
 # Only set OPENSSL_DIR if we built OpenSSL ourselves (not for Rocky Linux 8 CY2023 which uses system OpenSSL)
@@ -446,7 +477,7 @@ SET(_test_python_script
 ADD_CUSTOM_COMMAND(
   COMMENT "Testing Python distribution"
   OUTPUT ${${_python3_target}-test-flag}
-  COMMAND python3 "${_test_python_script}" --python-home "${_install_dir}" --variant "${CMAKE_BUILD_TYPE}"
+  COMMAND "${_rv_python3_host_exe}" "${_test_python_script}" --python-home "${_install_dir}" --variant "${CMAKE_BUILD_TYPE}"
   COMMAND cmake -E touch ${${_python3_target}-test-flag}
   DEPENDS ${${_python3_target}-requirements-flag} ${_test_python_script}
 )

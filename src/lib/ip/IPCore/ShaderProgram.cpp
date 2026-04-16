@@ -11,6 +11,7 @@
 #include <IPCore/IPImage.h>
 #include <TwkGLF/GL.h>
 #include <TwkUtil/Timer.h>
+#include <algorithm>
 #include <cassert>
 #include <set>
 #include <sstream>
@@ -918,6 +919,24 @@ namespace IPCore::Shader
             assert(nb.bsymbol->symbol() == S);
             GLint location = -1;
             location = uniformLocation(name);
+
+            // OCIO 2.x fallback: LUT sampler globals in sub-shaders are active
+            // without the _N counter suffix (helper functions use them directly).
+            // If not found with the suffix, try the base name (strip last _N).
+            if (location == -1)
+            {
+                size_t lastUnderscore = name.rfind('_');
+                if (lastUnderscore != string::npos && lastUnderscore + 1 < name.size())
+                {
+                    const string suffix = name.substr(lastUnderscore + 1);
+                    bool allDigits = !suffix.empty() && std::all_of(suffix.begin(), suffix.end(), ::isdigit);
+                    if (allDigits)
+                    {
+                        string baseName = name.substr(0, lastUnderscore);
+                        location = uniformLocation(baseName);
+                    }
+                }
+            }
 
             void* vp = b->valuePointer();
 

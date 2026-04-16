@@ -230,8 +230,122 @@ def build() -> None:
         if VARIANT == "Debug":
             pyside_build_args.append("--debug")
 
-    print(f"Executing {pyside_build_args}")
-    subprocess.run(pyside_build_args).check_returncode()
+    # On Windows, set DISTUTILS_USE_SDK so PySide2 uses the current VC environment
+    # instead of trying to detect and initialize MSVC (which fails with VS 2025).
+    build_env = os.environ.copy()
+    if platform.system() == "Windows":
+        build_env["DISTUTILS_USE_SDK"] = "1"
+        build_env["MSSdk"] = "1"
+
+        # Sanitize PATH: drop any non-Windows-style or corrupted entries that may
+        # have been inherited from an MSYS2/Git-Bash parent shell.
+        current_path = build_env.get("PATH", "")
+        clean_entries = []
+        seen = set()
+        import re
+        # Valid Windows path entry: starts with a drive letter like "C:\" or "D:\"
+        valid_entry = re.compile(r"^[A-Za-z]:[\\/]")
+        for entry in current_path.split(os.pathsep):
+            entry = entry.strip()
+            if not entry:
+                continue
+            if not valid_entry.match(entry):
+                continue
+            # Reject entries containing shell-like garbage (e.g., from ls -l leaking into PATH)
+            if "'" in entry or "->" in entry or '"' in entry:
+                continue
+            key = entry.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            clean_entries.append(entry)
+        build_env["PATH"] = os.pathsep.join(clean_entries)
+
+        # Ensure MSVC tools (cl.exe, nmake.exe, link.exe) are on PATH.
+        # When running as an MSBuild custom command, the VC tools may not be
+        # on PATH if the environment was not fully propagated.
+        import glob
+        vs_base = os.environ.get("VSINSTALLDIR", "")
+        if not vs_base:
+            # Try to find VS installation via vswhere
+            vswhere = os.path.join(
+                os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)"),
+                "Microsoft Visual Studio", "Installer", "vswhere.exe"
+            )
+            if os.path.exists(vswhere):
+                try:
+                    vs_base = subprocess.check_output(
+                        [vswhere, "-latest", "-prerelease", "-property", "installationPath", "-products", "*"],
+                    ).decode().strip()
+                except Exception:
+                    pass
+        if vs_base:
+            # Manually construct MSVC environment variables for VS 2025 compatibility.
+            # vcvarsall.bat cannot be called from MSYS2 bash contexts.
+            vc_tools_base = os.path.join(vs_base, "VC", "Tools", "MSVC")
+            if os.path.isdir(vc_tools_base):
+                msvc_versions = sorted(os.listdir(vc_tools_base), reverse=True)
+                for msvc_ver in msvc_versions:
+                    vc_bin = os.path.join(vc_tools_base, msvc_ver, "bin", "HostX64", "x64")
+                    vc_include = os.path.join(vc_tools_base, msvc_ver, "include")
+                    vc_lib = os.path.join(vc_tools_base, msvc_ver, "lib", "x64")
+                    if os.path.isfile(os.path.join(vc_bin, "cl.exe")):
+                        print(f"Setting up MSVC environment from: {vc_tools_base}/{msvc_ver}")
+                        # Add VC tools to PATH
+                        build_env["PATH"] = vc_bin + os.pathsep + build_env.get("PATH", "")
+                        # Add INCLUDE paths
+                        existing_include = build_env.get("INCLUDE", "")
+                        build_env["INCLUDE"] = vc_include + (";" + existing_include if existing_include else "")
+                        # Add LIB paths
+                        existing_lib = build_env.get("LIB", "")
+                        build_env["LIB"] = vc_lib + (";" + existing_lib if existing_lib else "")
+                        # Add Windows SDK paths
+                        win_sdk_root = os.environ.get("WindowsSdkDir", r"C:\Program Files (x86)\Windows Kits\10")
+                        win_sdk_ver = os.environ.get("WindowsSDKVersion", "")
+                        if not win_sdk_ver:
+                            sdk_inc = os.path.join(win_sdk_root, "Include")
+                            if os.path.isdir(sdk_inc):
+                                sdk_versions = sorted(os.listdir(sdk_inc), reverse=True)
+                                for sv in sdk_versions:
+                                    if os.path.isdir(os.path.join(sdk_inc, sv, "ucrt")):
+                                        win_sdk_ver = sv + "\\"
+                                        break
+                        if win_sdk_ver:
+                            sv = win_sdk_ver.rstrip("\\")
+                            sdk_inc_ucrt = os.path.join(win_sdk_root, "Include", sv, "ucrt")
+                            sdk_inc_um = os.path.join(win_sdk_root, "Include", sv, "um")
+                            sdk_inc_shared = os.path.join(win_sdk_root, "Include", sv, "shared")
+                            sdk_lib_ucrt = os.path.join(win_sdk_root, "Lib", sv, "ucrt", "x64")
+                            sdk_lib_um = os.path.join(win_sdk_root, "Lib", sv, "um", "x64")
+                            sdk_bin = os.path.join(win_sdk_root, "bin", sv, "x64")
+                            build_env["INCLUDE"] = build_env["INCLUDE"] + ";" + ";".join([sdk_inc_ucrt, sdk_inc_um, sdk_inc_shared])
+                            build_env["LIB"] = build_env["LIB"] + ";" + ";".join([sdk_lib_ucrt, sdk_lib_um])
+                            build_env["PATH"] = sdk_bin + os.pathsep + build_env["PATH"]
+                        break
+
+    print(f"Executing {pyside_build_args}", flush=True)
+    print(f"DEBUG LLVM_INSTALL_DIR: {build_env.get('LLVM_INSTALL_DIR', '(unset)')}", flush=True)
+    print(f"DEBUG CLANG_INSTALL_DIR: {build_env.get('CLANG_INSTALL_DIR', '(unset)')}", flush=True)
+
+    # Capture output so MSBuild's buffering does not hide real errors
+    log_file = os.path.join(TEMP_DIR, "pyside2_setup.log") if TEMP_DIR else "pyside2_setup.log"
+    print(f"Writing PySide2 setup.py output to: {log_file}", flush=True)
+    with open(log_file, "w", encoding="utf-8", errors="replace") as lf:
+        proc = subprocess.run(pyside_build_args, env=build_env, stdout=lf, stderr=subprocess.STDOUT)
+    if proc.returncode != 0:
+        # On failure, dump the tail of the log so MSBuild shows the real error
+        print(f"PySide2 setup.py FAILED with exit code {proc.returncode}", flush=True)
+        try:
+            with open(log_file, "r", encoding="utf-8", errors="replace") as lf:
+                lines = lf.readlines()
+            tail = lines[-80:] if len(lines) > 80 else lines
+            print("=== Last 80 lines of PySide2 setup.py log ===", flush=True)
+            for line in tail:
+                print(line.rstrip(), flush=True)
+            print("=== End of log tail ===", flush=True)
+        except Exception as e:
+            print(f"Failed to read log: {e}", flush=True)
+    proc.check_returncode()
 
     generator_cleanup_args = python_interpreter_args + [
         "-m",

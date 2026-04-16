@@ -157,6 +157,45 @@ LIST(
           OUTPUT_VARIABLE _boost_with_list
 )
 
+# Default CONFIGURE_COMMAND invokes bootstrap.{bat,sh} directly.
+SET(_boost_configure_command
+    ${_bootstrap_command} --with-toolset=${_toolset} --with-python=${_boost_python_bin}
+)
+
+# VFX-CY2025 / VS 2025 experimental workaround: Boost.Build's msvc.jam 14.3
+# parent-path probe cannot locate vcvarsall.bat for the VS 2025 / VS 18 install
+# layout. When the active generator points at VS 2025+, bootstrap via a CMake
+# -P wrapper that supplies an explicit <setup> after bootstrap.bat has built
+# b2.exe. VS 2022 (and earlier) continues to use the stock CONFIGURE_COMMAND.
+IF(RV_TARGET_WINDOWS AND CMAKE_GENERATOR_INSTANCE)
+  STRING(REGEX MATCH "Visual Studio[/\\]+([0-9]+)[/\\]" _rv_boost_vs_match "${CMAKE_GENERATOR_INSTANCE}")
+  SET(_rv_boost_vs_seg "${CMAKE_MATCH_1}")
+  # VS 2022 installs under ".../Visual Studio/2022/..." (4-digit year); VS 2025+
+  # moved to ".../Visual Studio/18/..." (single- or double-digit major). Treat
+  # any non-year segment as "new-style VS".
+  IF(_rv_boost_vs_seg MATCHES "^[0-9]+$" AND _rv_boost_vs_seg LESS 100)
+    MESSAGE(STATUS "Boost: detected Visual Studio ${_rv_boost_vs_seg} layout; enabling VS 2025 bootstrap workaround")
+    SET(_rv_boost_vc_tools_root "${CMAKE_GENERATOR_INSTANCE}/VC/Tools/MSVC")
+    FILE(GLOB _rv_boost_msvc_versions RELATIVE "${_rv_boost_vc_tools_root}" "${_rv_boost_vc_tools_root}/*")
+    IF(NOT _rv_boost_msvc_versions)
+      MESSAGE(FATAL_ERROR "Boost VS 2025 workaround: no MSVC toolsets found under ${_rv_boost_vc_tools_root}")
+    ENDIF()
+    LIST(SORT _rv_boost_msvc_versions)
+    LIST(REVERSE _rv_boost_msvc_versions)
+    LIST(GET _rv_boost_msvc_versions 0 _rv_boost_msvc_ver)
+    SET(_boost_configure_command
+        ${CMAKE_COMMAND}
+          -DSRC_DIR=${RV_DEPS_BASE_DIR}/${_target}/src
+          -DTOOLSET=${_toolset}
+          -DPYTHON_BIN=${_boost_python_bin}
+          -DCL_EXE=${_rv_boost_vc_tools_root}/${_rv_boost_msvc_ver}/bin/HostX64/x64/cl.exe
+          -DVCVARSALL=${CMAKE_GENERATOR_INSTANCE}/VC/Auxiliary/Build/vcvarsall.bat
+          -DVS_COMNTOOLS=${CMAKE_GENERATOR_INSTANCE}/Common7/Tools
+          -P ${CMAKE_CURRENT_LIST_DIR}/patch/boost_bootstrap_vs2025.cmake
+    )
+  ENDIF()
+ENDIF()
+
 SET(__boost_arch__
     x86
 )
@@ -178,7 +217,7 @@ EXTERNALPROJECT_ADD(
   INSTALL_DIR ${_install_dir}
   URL ${_download_url}
   URL_MD5 ${_download_hash}
-  CONFIGURE_COMMAND ${_bootstrap_command} --with-toolset=${_toolset} --with-python=${_boost_python_bin}
+  CONFIGURE_COMMAND ${_boost_configure_command}
   BUILD_COMMAND
     # Ref.: https://www.boost.org/doc/libs/1_70_0/tools/build/doc/html/index.html#bbv2.builtin.features.cflags Ref.:
     # https://www.boost.org/doc/libs/1_76_0/tools/build/doc/html/index.html#bbv2.builtin.features.cflags
