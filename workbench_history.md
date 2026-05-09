@@ -2,6 +2,142 @@
 
 ---
 
+## セッション 5: 2026-05-09 — upstream リビルド試行 → ローカルベース + AJA/Blackmagic 有効化 ✅
+
+**結果:** OpenRV 3.1.0 を VS 2025 / VFX CY2025 環境で AJA + Blackmagic 出力プラグイン有効でフルビルドに成功。
+`rv.exe -version` → `3.1.0`、`AJADevices.dll` + `BlackMagicDevices.dll` の両方を `_install/PlugIns/Output/` に配置。
+
+### 動機
+
+upstream (`AcademySoftwareFoundation/OpenRV`) が CY2025 / メジャー v4 へ正式移行したため
+（コミット `bc20b43b`, `fcafc94b`）、当方の非公式パッチを捨てて upstream ベースで
+ビルドし直したい。同時に Blackmagic Decklink 出力サポートを追加。
+
+### 試行 A: upstream/main をベースとして使用 → 失敗
+
+`try-upstream-clean` ブランチを `upstream/main` から作成。CMake configure は通過したが、
+ビルド段階で複数の問題が連鎖：
+
+1. **Python.props v140 PlatformToolset エラー**
+   - `'$(VCTargetsPath14)' != ''` のフォールバックが VS 2025 で v140 を要求
+   - 修正: `VisualStudioVersion == 18.0 → v143` 条件を `_build/RV_DEPS_PYTHON3/src/PCbuild/python.props` に追加（in-tree、非永続）
+
+2. **cryptography Rust crate のリンクエラー**
+   - rustup デフォルトが `stable-x86_64-pc-windows-gnu`（MinGW 系）
+   - MSVC でビルドした OpenSSL の `.lib` を消費できず "could not find native static library `ssl`"
+   - 修正: `RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-msvc` 環境変数を設定
+
+3. **PySide6 ビルドが MAX_PATH 超過で失敗**
+   - `VIRTUAL_ENV` 環境変数が `C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0` に設定されており、PySide6 setup.py がビルドディレクトリ名にこの長文字列を使用
+   - QtWebEngineCore wrapper の obj ファイルパスが MAX_PATH 超過 → `fatal error C1083: Cannot open compiler generated file: ''`
+   - 修正: `Remove-Item Env:\VIRTUAL_ENV` でクリア → ビルドディレクトリ名が `qfp-py3.11-qt6.5.3-64bit-release` に短縮されて成功
+
+4. **upstream は b379c71c で Boost を `RV_FIND_DEPENDENCY` 検索インフラに大幅リファクタ**
+   - Boost ロジックが `cmake/dependencies/build/boost.cmake` に分離
+   - 当方セッション 3 の Boost VS 2025 ラッパー（`1fdc3d5f`, `e9ae9a79`）はそのまま cherry-pick 不可
+   - 移植版を `cmake/dependencies/patch/boost_bootstrap_vs2025.cmake` にコピーして
+     `build/boost.cmake` に VS 2025 検出ブロックを追加するも、bootstrap.bat が
+     `'bootstrap.bat' is not recognized as an internal or external command` で失敗
+     （`NoDefaultCurrentDirectoryInExePath` の影響と推測）
+
+5. **CMake 4.x policy 非互換（DAV1D, ATOMIC_OPS, JPEGTURBO, OCIO/yaml-cpp）**
+   - 各 ExternalProject の CMakeLists.txt が `cmake_minimum_required(VERSION < 3.5)` を要求
+   - CMake 4 で互換性が削除済み
+
+6. **git clone 失敗（implot, imgui-backend-qt, imgui-node-editor, nanobind）**
+   - "remote helper 'https' aborted session" を 3 回リトライしても回復せず
+   - 原因判明後（試行 B にて）: CMake が **MSYS2 版 git** (`C:/msys64/usr/bin/git.exe`) を選択していた
+     （MSYS2 を flex/bison 検出のため PATH に追加した副作用）
+   - 修正: `-DGIT_EXECUTABLE="C:/Program Files/Git/bin/git.exe"` で Windows ネイティブ git を強制
+
+7. **DAV1D meson 旧 API deprecated**
+   - meson 1.11.1 で `meson ./_build` 形式が deprecated → `meson setup ./_build` 必須
+
+問題が連鎖的に多すぎるため、**試行 A を放棄**。
+
+### 試行 B: `local-vs2025-patches` ブランチをベースに切替 → 成功
+
+セッション 1〜4 の累積パッチを持つ既知動作の `local-vs2025-patches` ブランチへ切替。
+それでも以下の修正が必要だった：
+
+1. **Python.props v143 in-tree パッチ**（試行 A と同じ）
+   - 旧パッチ `cmake/dependencies/patch/python-3.11.9/python.3.11.9.python.props.patch` は OpenSSL 版数の差し替えのみで v143 toolset 対応は含まれていなかった
+   - `_build/RV_DEPS_PYTHON3/src/PCbuild/python.props` を直接編集（非永続）
+
+2. **環境変数の構成**:
+   ```powershell
+   $env:PATH = "C:\msys64\usr\bin;C:\Users\hiroshi\AppData\Roaming\Python\Python311\Scripts;" + $env:PATH
+   $env:RUSTUP_TOOLCHAIN = "stable-x86_64-pc-windows-msvc"
+   $env:CMAKE_POLICY_VERSION_MINIMUM = "3.5"
+   Remove-Item Env:\VIRTUAL_ENV -ErrorAction SilentlyContinue
+   ```
+   - `C:\msys64\usr\bin`: flex / bison / sh / make（FFmpeg, DAV1D 用）
+   - `Roaming\Python\Python311\Scripts`: meson.exe（system Python に `pip install --user meson` で配置）
+   - `CMAKE_POLICY_VERSION_MINIMUM=3.5`: 古い ExternalProject の `cmake_minimum_required` を許容（**env var として**設定。`-D` で渡すと Qt の cmake config と衝突する）
+
+3. **DAV1D meson 旧 API 修正（永続化）**:
+   `cmake/dependencies/dav1d.cmake` の `CONFIGURE_COMMAND` を `meson ./_build ...` → `meson setup ./_build ...` に修正
+
+4. **CMake configure コマンド**:
+   ```powershell
+   cmake -B _build -S . -G "Visual Studio 18 2026" -A x64 `
+     -DCMAKE_BUILD_TYPE=Release `
+     -DRV_VFX_PLATFORM=CY2025 `
+     -DCMAKE_INSTALL_PREFIX="$PWD/_install" `
+     -DRV_DEPS_QT_LOCATION="C:/Qt/6.5.3/msvc2019_64" `
+     -DRV_DEPS_WIN_PERL_ROOT="C:/Strawberry/perl/bin" `
+     -DRV_DEPS_BMD_DECKLINK_SDK_ZIP_PATH="D:/Blackmagic_DeckLink_SDK_16.0.zip" `
+     -DRV_PYTHON3_VERSION=3.11.9 `
+     "-DGIT_EXECUTABLE=C:/Program Files/Git/bin/git.exe"
+   ```
+
+5. **Blackmagic Decklink SDK**:
+   - `D:/Blackmagic_DeckLink_SDK_16.0.zip`（ファイル名末尾の `_16.0` から `cmake/dependencies/bmd.cmake` が版数を正規表現で抽出）
+   - `BlackMagicDevices` プラグインが自動的にビルドされ、`midl.exe` で `DeckLinkAPI.h` を IDL から生成
+
+### ビルド成果物（2026-05-09）
+
+| 項目 | 値 |
+|---|---|
+| `rv.exe -version` | `3.1.0` |
+| `_install/bin/rv.exe` サイズ | 13 MB |
+| AJA プラグイン | `_install/PlugIns/Output/AJADevices.dll` (AJA 17.6.0.hotfix1) |
+| Blackmagic プラグイン | `_install/PlugIns/Output/BlackMagicDevices.dll` (BMD 16.0) |
+| Qt | 6.5.3 msvc2019_64（C:/Qt/6.5.3/msvc2019_64） |
+| Python | 3.11.9（in-tree ビルド） |
+| PySide | 6.5.3 |
+| Boost | 1.85.0 |
+| OCIO | 2.4.2 |
+| OpenEXR | 3.3.x |
+
+### 教訓
+
+1. **upstream の CY2025 移行は VS 2025 での動作を保証しない** — VS 2022 でテストされており、VS 2025 (`Visual Studio 18 2026` ジェネレータ) では vcvarsall.bat の `VCEnd` ラベル問題、Python の v140 フォールバック、CMake 4.x ポリシー非互換などが連鎖発生
+2. **`VIRTUAL_ENV` 環境変数が PySide6 ビルドを汚染する** — Windows Store Python 3.12 を別途インストールしていると `VIRTUAL_ENV` がそれを指してしまい、PySide6 setup.py のビルドディレクトリ名が `PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0` になって MAX_PATH 超過。シェル設定を疑うべき
+3. **MSYS2 PATH の優先度に注意** — flex/bison のために `C:\msys64\usr\bin` を PATH に入れると、CMake の `FIND_PROGRAM(GIT)` が MSYS2 git を拾い、ExternalProject の git clone が "remote helper 'https' aborted session" で失敗する。`-DGIT_EXECUTABLE` で明示指定すべき
+4. **CMake 4.x の `CMAKE_POLICY_VERSION_MINIMUM=3.5` は env var で渡す** — `-D` で渡すと外側プロジェクトとその cmake config（Qt 等）にも影響して逆に壊れる
+5. **meson 1.11+ は `meson setup` 構文必須** — `meson ./_build` は deprecated → エラー扱い
+
+### コミット（local-vs2025-patches に追加）
+
+セッション 5 の修正は永続化されていない（in-tree パッチおよび環境変数のみ）。
+唯一 dav1d.cmake の `meson setup` 修正のみ恒久パッチ候補（未コミット）。
+
+### 次回ビルド時の手順サマリ
+
+```powershell
+# 環境変数を必ず設定
+$env:PATH = "C:\msys64\usr\bin;C:\Users\hiroshi\AppData\Roaming\Python\Python311\Scripts;" + $env:PATH
+$env:RUSTUP_TOOLCHAIN = "stable-x86_64-pc-windows-msvc"
+$env:CMAKE_POLICY_VERSION_MINIMUM = "3.5"
+Remove-Item Env:\VIRTUAL_ENV -ErrorAction SilentlyContinue
+
+# Python source を fresh 抽出した直後、_build/RV_DEPS_PYTHON3/src/PCbuild/python.props に
+# `VisualStudioVersion == 18.0 → v143` 行を手動追加すること（patch dir に永続化要検討）
+```
+
+---
+
 ## セッション 4: 2026-04-12 — OCIO Display 黒画面バグ修正 ✅
 
 **結果:** ACES 2.0 Output Transform が GPU で正常動作。sRGB / Rec.1886 / P3 等すべての
