@@ -20,6 +20,34 @@ SET(_target
     "RV_DEPS_FFMPEG"
 )
 
+# ---------------------------------------------------------------------------
+# ProRes decoder default-enabled (this fork only)
+# ---------------------------------------------------------------------------
+# OpenRV upstream disables non-free decoders (incl. prores) by default and
+# expects users to integrate Apple's official ProRes Decoder SDK
+# (https://developer.apple.com/prores/) for production use. This fork enables
+# FFmpeg's built-in (reverse-engineered) prores decoder by default so that
+# typical .mov ProRes files play out of the box, since obtaining Apple's SDK
+# requires registering with Apple at prores@apple.com.
+#
+# Trade-offs:
+#   - Apple does NOT license the FFmpeg implementation. Distributing a build
+#     containing it commercially or to clients may violate Apple's IP terms
+#     in some jurisdictions. Internal / production-pipeline use is generally
+#     considered low-risk by most studios but is at your own discretion.
+#   - For licensed productions targeting Apple ProRes deliverables, switch
+#     to Apple's SDK and pass `-DRV_FFMPEG_NON_FREE_DECODERS_TO_ENABLE=`
+#     (empty) to disable this default.
+#
+# To disable: pass `-DRV_FFMPEG_NON_FREE_DECODERS_TO_ENABLE=` at configure time.
+# To extend: pass e.g. `-DRV_FFMPEG_NON_FREE_DECODERS_TO_ENABLE=prores;dnxhd`.
+IF(NOT DEFINED RV_FFMPEG_NON_FREE_DECODERS_TO_ENABLE)
+  SET(RV_FFMPEG_NON_FREE_DECODERS_TO_ENABLE
+      "prores"
+      CACHE STRING "Non-free FFmpeg decoders to enable. ProRes uses FFmpeg's reverse-engineered decoder; not officially licensed by Apple. See cmake/dependencies/ffmpeg.cmake for details."
+  )
+ENDIF()
+
 SET(_version
     ${RV_DEPS_FFMPEG_VERSION}
 )

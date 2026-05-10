@@ -136,6 +136,34 @@ Remove-Item Env:\VIRTUAL_ENV -ErrorAction SilentlyContinue
 # `VisualStudioVersion == 18.0 → v143` 行を手動追加すること（patch dir に永続化要検討）
 ```
 
+### セッション 5 補遺 — UAT 中の ProRes 対応
+
+UAT 中（§2 メディア再生）に `.mov` ProRes ファイルが `MovieFFMpeg: Unsupported codec_id '147'`
+で再生できないことが判明。upstream は ProRes を non-free デコーダとして既定で無効化し、
+プロダクションでは Apple ProRes Decoder SDK の組込みを推奨している。
+
+ユーザ判断により、本フォークでは **FFmpeg 内蔵（リバースエンジニアリング版）デコーダを既定有効化**。
+
+**変更:**
+- `cmake/dependencies/ffmpeg.cmake` 冒頭に `RV_FFMPEG_NON_FREE_DECODERS_TO_ENABLE=prores`
+  をキャッシュ変数の既定値として設定（コメントでライセンス上の注意点を明記）
+- 連鎖でトリガされる動作:
+  1. FFmpeg がリビルドされ `--disable-decoder=prores` が外れる
+  2. `src/lib/image/mio_ffmpeg/CMakeLists.txt` の FOREACH が
+     `-D__FFMPEG_ENABLE_NON_FREE_DECODER_prores` を `mio_ffmpeg` のコンパイルに追加
+  3. ランタイム allow-list (`src/lib/image/mio_ffmpeg/init.cpp` の `disallowedCodecsArray`) から
+     "prores" が除外され、FFmpeg のデコーダが採用される
+
+**ドキュメント反映:**
+- [FORK_NOTES.md](FORK_NOTES.md) を新規作成（フォーク全体の差分とライセンス注意点を集約）
+- [README.md](README.md) 冒頭にフォーク + ProRes 注意ブロック
+- [UAT_checklist.md](UAT_checklist.md) の不具合ログを FIXED に更新
+
+**ライセンス上の注意（厳守）:**
+- Apple は FFmpeg 実装をライセンス対象としていない
+- 商用配布 / クライアント納品の前に Apple ProRes Decoder SDK への切替を検討すること
+- 社内パイプライン利用でも組織ポリシーに従うこと
+
 ---
 
 ## セッション 4: 2026-04-12 — OCIO Display 黒画面バグ修正 ✅

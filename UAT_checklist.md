@@ -9,23 +9,23 @@
 
 ---
 
-## 1. 基本起動・スタンドアロン動作
+## 1. 基本起動・スタンドアロン動作 ✅ PASS (2026-05-09)
 
-- [ ] zip を任意のディレクトリに展開（例: `C:\OpenRV-3.2.0\`）
-- [ ] `bin\rv.exe` をダブルクリックで起動
-- [ ] スプラッシュ表示後、メインウィンドウが開く
-- [ ] `rv.exe -version` で `3.2.0` を確認
-- [ ] `rv.exe -help` でコマンドオプション一覧が表示される
-- [ ] **環境変数なしで動作する**（PYTHONHOME / PYTHONPATH 不要）
+- [x] zip を任意のディレクトリに展開（例: `C:\OpenRV-3.2.0\`）
+- [x] `bin\rv.exe` をダブルクリックで起動
+- [x] メインウィンドウが開く ※スプラッシュ画面は表示されない（仕様）
+- [x] `rv.exe -version` で `3.2.0` を確認
+- [x] `rv.exe -help` でコマンドオプション一覧が表示される
+- [x] **環境変数なしで動作する**（PYTHONHOME / PYTHONPATH 不要）
 
-## 2. メディア再生
+## 2. メディア再生 ⚠️ 部分 PASS (2026-05-09)
 
-- [ ] 静止画 (PNG, JPG, EXR, TIFF) を読み込んで表示
-- [ ] EXR シーケンス（マルチチャンネル含む）の再生
-- [ ] H.264 mp4 / MOV 動画の再生（FFmpeg 経由）
-- [ ] **ProRes** がデコードできるか（FFmpeg 経由、Apple SDK 無し）
-- [ ] **DAV1D による AV1** の再生
-- [ ] **OpenJPEG / OpenJPH** による J2K / JPEG-XS の再生
+- [x] 静止画 (PNG, JPG, EXR, TIFF) を読み込んで表示 — **PASS**
+- [x] EXR シーケンス（マルチチャンネル含む）の再生 — **PASS**
+- [x] H.264 mp4 / MOV 動画の再生（FFmpeg 経由） — **PASS**
+- [x] **ProRes** がデコードできるか（FFmpeg 経由、Apple SDK 無し） — **FAIL** (codec_id 147 が MovieFFMpeg の whitelist に無い)
+- [ ] **DAV1D による AV1** の再生 — **DEFERRED**（テストメディア準備中）
+- [ ] **OpenJPEG / OpenJPH** による J2K / JPEG-XS の再生 — **DEFERRED**（テストメディア準備中）
 - [ ] 音声付き動画の再生 + 音声同期
 
 ## 3. AJA 出力プラグイン（実機があれば）
@@ -105,4 +105,28 @@
 
 ## 不具合・改善要望ログ
 
-<!-- ここに UAT で発見した問題を記録 -->
+### 仕様確認 - スプラッシュ画面なし (§1, 2026-05-09)
+- 起動時にスプラッシュ画面は表示されない仕様。アクションなし。
+- ステータス: 確認済み（不具合ではない）
+
+### FIXED - ProRes 未サポート (§2, 2026-05-09)
+- ファイル: `Q:/FPTT_2026/composite/renders/Transit/FLTT_S102_0021_comp_v0001.mov`
+- エラー: `MovieFFMpeg: Unsupported codec_id '147'` → codec_id 147 は ProRes (`AV_CODEC_ID_PRORES`)
+- 原因: upstream は ProRes を含む non-free デコーダを既定で無効化しており、FFmpeg 自体に ProRes デコーダが含まれていなかった
+  - `cmake/dependencies/ffmpeg.cmake` の `NON_FREE_DECODERS_TO_DISABLE` リストに `prores` が含まれていた
+  - ランタイムの allow-list は `src/lib/image/mio_ffmpeg/init.cpp` の `disallowedCodecsArray` で管理
+- 採用した解決策: **option 2（FFmpeg 内蔵デコーダ利用）**
+  - `cmake/dependencies/ffmpeg.cmake` で `RV_FFMPEG_NON_FREE_DECODERS_TO_ENABLE=prores` を本フォークの既定キャッシュ値に設定
+  - 副作用: FFmpeg と mio_ffmpeg の再ビルドが必要
+  - **ライセンス上の注意**: Apple は FFmpeg 実装をライセンス対象としていない。商用配布や外部納品では Apple SDK を使うべき。詳細は [FORK_NOTES.md](FORK_NOTES.md) 参照
+- ステータス: **解決済み**（再ビルド + 動作確認は別途実施予定）
+
+### 確認 - $OCIO 環境変数の扱い (§2, 2026-05-09)
+- 症状: 起動時に `ERROR: Unable to retrieve OCIO context: ERROR: $OCIO environment variable unset!`
+- OpenRV 自体は OCIO 環境変数を**必須としない**が、デフォルト View が OCIO Display に設定されているとロード時にエラーが出る
+- 対応: Preferences → Color → 既定 View を Default / Linear に変更、または `OCIO=<path-to-config.ocio>` を設定
+- ステータス: 仕様内（不具合ではない）
+
+### 確認 - H.264 mp4 / MOV (§2, 2026-05-09)
+- 別ファイル（実際の H.264）で再テスト → **PASS**
+- ステータス: 解決済み

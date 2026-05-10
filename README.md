@@ -1,3 +1,5 @@
+> **⚠ Fork notice**: This is a `hiroshisaito/OpenRV-build` fork with custom VS 2025 / CY2025 build patches and **ProRes decoding enabled by default via FFmpeg's reverse-engineered decoder** (not licensed by Apple). See [FORK_NOTES.md](FORK_NOTES.md) for details and licensing implications before commercial / external distribution.
+
 # Open RV
 
 ---
