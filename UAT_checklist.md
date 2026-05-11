@@ -56,17 +56,17 @@
 
 * [ ] 解像度 / フレームレート（24, 25, 29.97, 30, 50, 59.94, 60）切替
 
-## 4. Blackmagic Decklink 出力プラグイン (DeckLink 4K Pro + DV 12.5.1)
+## 4. Blackmagic Decklink 出力プラグイン (DeckLink 4K Pro + DV 12.5.1) ⏸ BLOCKED
 
-* [x] File → Preferences → Video → Output Module に **BlackMagic** が出現 — **PASS** (2026-05-11、要 commit `402e71c9` 以降の IID フォールバック修正)
+* [ ] File → Preferences → Video → Output Module に **BlackMagic** が出現 — **BLOCKED** (Desktop Video 16.x 系へアップグレード必須)
 
-* [x] Output Device に DeckLink 4K Pro が表示される — **PASS** (numVideoFormats=28)
-
-* [ ] DeckLink から外部モニタへの映像出力（要再生テスト）
+* [ ] DeckLink から外部モニタへの映像出力
 
 * [ ] SDI / HDMI 切替
 
 * [ ] フォーマット切替が反映される
+
+**ブロッカー**: Desktop Video 12.5.1 は SDK 16.0 の現行 `IDeckLinkOutput` IID を公開していない。SDK が提供する過去 IID (`v15_3_1`, `v14_2_1`) は QueryInterface は通るが、vtable レイアウトが現行と非互換のため、実際に出力するとクラッシュする（commit `2977ba3d` で安全に Output モジュール非表示に変更）。本フォークの SDK 16.0 build を使うには **DV 16.x へのアップグレード**が必要。
 
 ## 5. OCIO カラーマネジメント（重要：セッション 4 のリグレッション確認）
 
@@ -192,7 +192,14 @@
 
 * ステータス: 解決済み
 
-### FIXED - BlackMagic デバイスが Preferences に表示されない (§4, 2026-05-11)
+### BLOCKED - BlackMagic デバイス表示 → 出力でクラッシュ → 安全に非表示へ (§4, 2026-05-11)
+
+**最終状態**: Desktop Video 16.x 系（SDK 16.0 と整合）へのアップグレードが必須。本フォークの BMD プラグインは現行 IID のみ使用、ランタイム不整合時は明確なメッセージを表示してデバイスを非表示にする。
+
+**経緯（FIXED → CRASH → BLOCKED の流れ）**:
+
+#### FIXED 段階 (commit `402e71c9`) — 誤判定で導入したフォールバック
+旧記録（誤り）:
 
 * 症状: DeckLink 4K Pro + Desktop Video 12.5.1 環境で、`BlackMagicDevices.dll` はロードされるが Preferences → Video → Output Module に `BlackMagic` が出現しない。エラーログにも何も出ない（DaVinci Resolve / xSTUDIO 等の他アプリでは動作）。
 
@@ -210,4 +217,29 @@
 
 * ステータス: **解決済み**
 
-* upstream Issue 候補（要報告検討）
+#### CRASH 段階 (User test 2026-05-11) — 致命的バグ判明
+
+* 症状: BMD を Output Module に選択し View → Presentation Device をオンにすると RV がクラッシュ（再現性あり）。
+
+* 原因: SDK 16.0 ヘッダの `IDeckLinkOutput_v14_2_1` を `IDeckLinkOutput*` にキャストして使用するのは**安全ではない**。vtable レイアウトが異なる:
+  - スロット 7: current SDK は `CreateVideoFrame`、v14_2_1 は `SetVideoOutputFrameMemoryAllocator`
+  - 以降のスロットも全てずれる
+  - QueryInterface は IUnknown 部分のみ vtable-stable なので通る
+  - `CreateVideoFrame()` 呼び出し → 別関数（別シグネチャ）へジャンプ → クラッシュ
+  
+* 当初の私の判断「`DoesSupportVideoMode` のシグネチャが同一だから vtable 互換」は誤り。**シグネチャ一致は vtable 互換性を保証しない**。スロット位置（メソッド順序）が同一である必要がある。
+
+#### BLOCKED 段階 (commit `2977ba3d`) — 最終解決方針
+
+* `IDeckLinkOutput` のフォールバックを撤去、**current IID のみ使用**。
+* 古い IID は **診断専用** で QI を試し、見つかれば「v14_2_1 が公開されているが unsafe」のメッセージを表示。
+* 最終的にデバイスが追加できない場合は明確なエラー: "Update Desktop Video to a release matching the SDK"
+* `IDeckLinkConfiguration` のフォールバックは維持（SetInt/SetFlag/Release は IUnknown 近傍のスロットで安定）
+
+**upstream Issue 報告について**:
+- 当初の提案レポート（v14_2_1 vtable 互換）は誤りなので訂正が必要
+- 本質的な問題: SDK 16.0 と古い DV ランタイムの組み合わせは原理的に動作しない
+- upstream の解決方針候補:
+  1. version-aware wrapper を実装（ABI 違いを抽象化）
+  2. ビルド時に「対応 DV バージョン」をメッセージで明示
+  3. 起動時に DV バージョンを検出して非対応なら明確にエラー
