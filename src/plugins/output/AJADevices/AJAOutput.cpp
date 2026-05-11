@@ -7,6 +7,9 @@
 #include <AJADevices/AJAModule.h>
 #include <TwkUtil/FourCC.h>
 
+#include <exception>
+#include <iostream>
+
 extern "C"
 {
 #ifdef PLATFORM_WINDOWS
@@ -29,8 +32,13 @@ extern "C"
                                                  AJADevices::AJAModule::OperationMode::SimpleMode);
             }
         }
+        catch (const std::exception& e)
+        {
+            std::cerr << "ERROR: AJADevices: output_module_create(index=" << output_module_index << ") failed: " << e.what() << std::endl;
+        }
         catch (...)
         {
+            std::cerr << "ERROR: AJADevices: output_module_create(index=" << output_module_index << ") failed with unknown exception" << std::endl;
         }
 
         return nullptr;
