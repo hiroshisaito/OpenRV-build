@@ -9,7 +9,7 @@
 - Base: equivalent to upstream `AcademySoftwareFoundation/OpenRV` v3.2.0
 - VFX Platform: **CY2025**
 - Verified build environment: Windows 11, VS 2025 (v18.4), CMake 4.2.3, Qt 6.5.3, Python 3.11.9
-- Extensions in this fork: AJA 17.6.0 / Blackmagic DeckLink 16.0 output plugins bundled, FFmpeg ProRes decoder enabled by default, VS 2025 build patches
+- Extensions in this fork: AJA 17.6.0.hotfix1 / Blackmagic DeckLink 16.0 output plugins bundled, FFmpeg ProRes decoder enabled by default, VS 2025 build patches
 
 ### ⚠️ Blackmagic DeckLink Runtime Compatibility (Important)
 
@@ -63,7 +63,7 @@ This build enables FFmpeg's **reverse-engineered ProRes decoder** by default (se
 | Qt | 6.5.3 (msvc2019_64) |
 | Python | 3.11.9 |
 | Blackmagic Desktop Video | **16.0 or later (required when the output plugin is used)** |
-| AJA | NTV2 SDK 17.6.0 (built automatically; no separate installer needed) |
+| AJA | NTV2 SDK 17.6.0.hotfix1 (built automatically; no separate installer needed) |
 
 ### UAT coverage
 

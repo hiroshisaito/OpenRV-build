@@ -9,7 +9,7 @@
 - ベース: upstream `AcademySoftwareFoundation/OpenRV` v3.2.0 相当
 - 対応 VFX Platform: **CY2025**
 - 動作確認環境: Windows 11, VS 2025 (v18.4), CMake 4.2.3, Qt 6.5.3, Python 3.11.9
-- 主要拡張: AJA 17.6.0 / Blackmagic DeckLink 16.0 出力プラグイン同梱、FFmpeg ProRes デコーダ既定有効化、VS 2025 ビルド対応
+- 主要拡張: AJA 17.6.0.hotfix1 / Blackmagic DeckLink 16.0 出力プラグイン同梱、FFmpeg ProRes デコーダ既定有効化、VS 2025 ビルド対応
 
 ### ⚠️ Blackmagic DeckLink ランタイム互換性（重要）
 
@@ -63,7 +63,7 @@
 | Qt | 6.5.3 (msvc2019_64) |
 | Python | 3.11.9 |
 | Blackmagic Desktop Video | **16.0 以降必須**（出力プラグイン使用時） |
-| AJA | NTV2 SDK 17.6.0 同梱（自動ビルド、別途インストール不要） |
+| AJA | NTV2 SDK 17.6.0.hotfix1 同梱（自動ビルド、別途インストール不要） |
 
 ### UAT 検証範囲
 
