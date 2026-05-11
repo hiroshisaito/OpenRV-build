@@ -1,4 +1,6 @@
-> **⚠ Fork notice**: This is a `hiroshisaito/OpenRV-build` fork with custom VS 2025 / CY2025 build patches and **ProRes decoding enabled by default via FFmpeg's reverse-engineered decoder** (not licensed by Apple). See [FORK_NOTES.md](FORK_NOTES.md) for details and licensing implications before commercial / external distribution.
+> **⚠ Fork notice**: This is a `hiroshisaito/OpenRV-build` fork with custom VS 2025 / CY2025 build patches and **ProRes decoding enabled by default via FFmpeg's reverse-engineered decoder** (not licensed by Apple).
+>
+> **Blackmagic DeckLink users**: this build is linked against DeckLink SDK 16.0 and **requires Desktop Video 16.0 or newer** at runtime; older drivers (e.g. 12.x, 14.x) will silently hide the BlackMagic output module. See [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full compatibility matrix and [FORK_NOTES.md](FORK_NOTES.md) for licensing implications before commercial / external distribution.
 
 # Open RV
 

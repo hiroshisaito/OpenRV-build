@@ -34,6 +34,29 @@ cmake -B _build -S . -DRV_FFMPEG_NON_FREE_DECODERS_TO_ENABLE="prores;dnxhd;qtrle
 
 ---
 
+## Blackmagic DeckLink ランタイム互換性 ⚠️
+
+本ビルドは **Blackmagic DeckLink SDK 16.0** に対してリンクされています。出力プラグインを使うには **Desktop Video 16.0 以降** が必要です。
+
+| Desktop Video | 結果 |
+|---|---|
+| 12.5.1 以下 | ❌ 非対応 (デバイス非表示) |
+| 14.2.1 | ❌ 非対応 (デバイス非表示) |
+| **16.0.1** | ✅ **動作確認済**（映像 + 音声 + SDI/HDMI + UHD↔HD）|
+
+非対応ランタイムを使うと起動ログに以下のメッセージが表示され、BMD モジュールは Output Module ドロップダウンに**意図的に出現しません**（クラッシュ防止）:
+
+```
+ERROR: BlackMagicDevices: 'DeckLink XXX' does not expose the current
+       IDeckLinkOutput interface (SDK 16.0). Update Desktop Video to
+       a release matching the SDK used to build OpenRV.
+       Download: https://www.blackmagicdesign.com/support
+```
+
+詳細は [RELEASE_NOTES.md](RELEASE_NOTES.md) を参照。
+
+---
+
 ## VS 2025 / VFX CY2025 ビルド対応
 
 upstream は CY2025 へ移行済みですが、VS 2025（Visual Studio 18, MSBuild 18.4）でのビルドには追加対応が必要です。詳細は [workbench_history.md](workbench_history.md) のセッション 5 を参照。
