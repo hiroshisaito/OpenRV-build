@@ -1,27 +1,29 @@
-# OpenRV (hiroshisaito/OpenRV-build) リリースノート
+# OpenRV (hiroshisaito/OpenRV-build) Release Notes
+
+> 日本語版: [RELEASE_NOTES_ja.md](RELEASE_NOTES_ja.md)
 
 ## v3.2.0 — 2026-05-11
 
-### 概要
+### Overview
 
-- ベース: upstream `AcademySoftwareFoundation/OpenRV` v3.2.0 相当
-- 対応 VFX Platform: **CY2025**
-- 動作確認環境: Windows 11, VS 2025 (v18.4), CMake 4.2.3, Qt 6.5.3, Python 3.11.9
-- 主要拡張: AJA 17.6.0 / Blackmagic DeckLink 16.0 出力プラグイン同梱、FFmpeg ProRes デコーダ既定有効化、VS 2025 ビルド対応
+- Base: equivalent to upstream `AcademySoftwareFoundation/OpenRV` v3.2.0
+- VFX Platform: **CY2025**
+- Verified build environment: Windows 11, VS 2025 (v18.4), CMake 4.2.3, Qt 6.5.3, Python 3.11.9
+- Extensions in this fork: AJA 17.6.0 / Blackmagic DeckLink 16.0 output plugins bundled, FFmpeg ProRes decoder enabled by default, VS 2025 build patches
 
-### ⚠️ Blackmagic DeckLink ランタイム互換性（重要）
+### ⚠️ Blackmagic DeckLink Runtime Compatibility (Important)
 
-本ビルドは **Blackmagic DeckLink SDK 16.0** に対してリンクしています。出力プラグインを利用するには、ホストの **Blackmagic Desktop Video が SDK 16.0 に対応する版**である必要があります。
+This build is linked against **Blackmagic DeckLink SDK 16.0**. To use the output plugin you must have a **Blackmagic Desktop Video runtime that matches SDK 16.0**.
 
-| Desktop Video バージョン | 動作 | 備考 |
+| Desktop Video version | Result | Notes |
 |---|---|---|
-| 12.5.1 以下 | ❌ 動作しない | DeckLink デバイスが Output Module に出現しません。ログに警告メッセージが出ます |
-| 14.2.1 | ❌ 動作しない | 同上 |
-| **16.0.1 以降** | ✅ **PASS** | 映像 + 音声 + SDI/HDMI 切替 + UHD↔HD フォーマット切替まで確認 |
+| 12.5.1 and earlier | ❌ Does not work | The DeckLink device does not appear in the Output Module dropdown; a warning is printed to the log |
+| 14.2.1 | ❌ Does not work | Same as above |
+| **16.0.1 or later** | ✅ **PASS** | Verified: video + audio + SDI/HDMI switching + UHD↔HD format switching |
 
-**動作しない場合の症状**:
-- File → Preferences → Video → Output Module ドロップダウンに **BlackMagic** が表示されない
-- 起動時コンソール / ログに以下のような行が出る:
+**Symptoms when the runtime is too old**:
+- `File → Preferences → Video → Output Module` dropdown does **not** list **BlackMagic**.
+- The startup console / log file contains:
   ```
   ERROR: BlackMagicDevices: 'DeckLink XXX' does not expose the current
          IDeckLinkOutput interface (SDK 16.0). Update Desktop Video to
@@ -29,46 +31,46 @@
          Download: https://www.blackmagicdesign.com/support
   ```
 
-**対応**: <https://www.blackmagicdesign.com/support/family/capture-and-playback> より **Desktop Video 16.0 以降** をインストール / アップグレードしてください。DaVinci Resolve や他の Blackmagic 対応アプリは古い DV でも動作する場合がありますが、**本ビルドは SDK 16.0 で固定**のため後方互換しません。
+**Fix**: download and install **Desktop Video 16.0 or later** from <https://www.blackmagicdesign.com/support/family/capture-and-playback>. DaVinci Resolve and some other Blackmagic-aware apps may keep working on older Desktop Video releases, but **this build is pinned to SDK 16.0** and is not backwards compatible.
 
-**技術的背景**:
-- SDK 16.0 の `IDeckLinkOutput` インターフェース GUID (`5F227C95-39D7-46C7-...`) は DV 16.x 以降でしか公開されていません
-- 古い DV ランタイムが公開する `IDeckLinkOutput_v14_2_1` などの過去 IID は QueryInterface は通りますが、**vtable レイアウトが現行と非互換**（例: スロット 7 が v14_2_1 では `SetVideoOutputFrameMemoryAllocator`、現行では `CreateVideoFrame`）。誤って使うとプロセスがクラッシュします
-- 本ビルドは現行 IID のみを受け入れる安全策を採用しており、非対応ランタイムでは BMD モジュールを意図的に非表示にします（commit `2977ba3d`）
+**Technical background**:
+- The `IDeckLinkOutput` interface GUID introduced in SDK 16.0 (`5F227C95-39D7-46C7-...`) is only registered by Desktop Video 16.x and later.
+- Older runtimes expose legacy IIDs such as `IDeckLinkOutput_v14_2_1`. `QueryInterface` succeeds for those, but the **vtable layout is not compatible with the current interface** (e.g. slot 7 maps to `SetVideoOutputFrameMemoryAllocator` in v14_2_1 versus `CreateVideoFrame` in the current SDK). Using such a pointer through `IDeckLinkOutput*` dispatches to the wrong function and crashes the process.
+- This build accepts only the current IID. When an incompatible runtime is detected the plugin intentionally hides the BlackMagic module instead of letting it appear and crash (commit `2977ba3d`).
 
-### ⚠️ ProRes デコーダ ライセンスに関する注意
+### ⚠️ ProRes Decoder Licensing Notice
 
-本ビルドは **FFmpeg のリバースエンジニアリング版 ProRes デコーダ**を既定で有効化しています ([FORK_NOTES.md](FORK_NOTES.md) 参照)。
+This build enables FFmpeg's **reverse-engineered ProRes decoder** by default (see [FORK_NOTES.md](FORK_NOTES.md) for details).
 
-- 社内ワークフロー / 内部レビューでは利用可
-- **商用配布 / クライアント納品** では Apple ProRes Decoder SDK への切替を推奨（要 Apple への申請）
-- 無効化したい場合: configure 時に `-DRV_FFMPEG_NON_FREE_DECODERS_TO_ENABLE=` (空) を渡してリビルド
+- In-house workflows / internal review: generally fine.
+- **Commercial distribution / client deliveries**: switch to Apple's official ProRes Decoder SDK (requires registration with Apple).
+- To disable, re-run CMake with `-DRV_FFMPEG_NON_FREE_DECODERS_TO_ENABLE=` (empty).
 
-### その他の同梱機能・修正
+### Other bundled features and fixes
 
-- VS 2025 (Visual Studio 18, MSBuild 18.4) でのビルド対応
-- Python `python.props` の v143 toolset 検出
-- Boost VS 2025 bootstrap ラッパー
-- DAV1D の meson 1.11+ 構文対応 (`meson setup` 必須)
-- OCIO 2.x 1D LUT サンプラ uniform バインディング修正（ACES 2.0 GPU ディスプレイで黒画面回避、commit `b9d9beee`）
+- Visual Studio 2025 (Visual Studio 18, MSBuild 18.4) build support.
+- Python `python.props` `v143` toolset detection patch.
+- Boost VS 2025 bootstrap wrapper.
+- DAV1D upgraded to the meson 1.11+ `meson setup` syntax.
+- OCIO 2.x 1D LUT sampler uniform binding fix — prevents the ACES 2.0 black-screen regression on GPU displays (commit `b9d9beee`).
 
-### 互換性 / 既知の制限
+### Compatibility / known constraints
 
-| 項目 | 必要バージョン |
+| Item | Required version |
 |---|---|
 | Windows | 10/11 (x64) |
-| Visual Studio | 2025 (v18.4) 以降 |
+| Visual Studio | 2025 (v18.4) or later |
 | Qt | 6.5.3 (msvc2019_64) |
 | Python | 3.11.9 |
-| Blackmagic Desktop Video | **16.0 以降必須**（出力プラグイン使用時） |
-| AJA | NTV2 SDK 17.6.0 同梱（自動ビルド、別途インストール不要） |
+| Blackmagic Desktop Video | **16.0 or later (required when the output plugin is used)** |
+| AJA | NTV2 SDK 17.6.0 (built automatically; no separate installer needed) |
 
-### UAT 検証範囲
+### UAT coverage
 
-[UAT_checklist.md](UAT_checklist.md) を参照。主要項目（起動、メディア再生、ACES 2.0、Blackmagic 出力、パフォーマンス）の PASS を確認済み。Qt/GUI 細部、Python スクリプト、RV ツール CLI 等は次回サイクルで検証予定。
+See [UAT_checklist.md](UAT_checklist.md). The key items — launch, media playback, ACES 2.0, Blackmagic output, performance — have all PASSed. Qt/GUI details, Python scripting, and the RV CLI tools are scheduled for the next UAT cycle.
 
-### 関連リンク
+### Related links
 
-- [FORK_NOTES.md](FORK_NOTES.md) — フォーク全般の差分とライセンス上の注意
-- [workbench_history.md](workbench_history.md) — ビルドセッションの作業履歴
-- [UAT_checklist.md](UAT_checklist.md) — UAT チェックリストと結果
+- [FORK_NOTES.md](FORK_NOTES.md) — fork-wide deltas and licensing notes.
+- [workbench_history.md](workbench_history.md) — build session history.
+- [UAT_checklist.md](UAT_checklist.md) — UAT checklist and results.
