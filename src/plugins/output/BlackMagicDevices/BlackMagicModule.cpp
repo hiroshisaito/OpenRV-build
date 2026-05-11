@@ -347,38 +347,53 @@ namespace BlackMagicDevices
             string nameString(name);
 #endif
 
-            // Try the current SDK 16.0 IID first, then fall back to older
-            // SDK IIDs in case the user's Desktop Video runtime is older than
-            // our SDK. Versions v15_3_1 and v14_2_1 are vtable-compatible
-            // with the current IDeckLinkOutput for the methods we call
-            // (DoesSupportVideoMode signature unchanged since SDK 14.2.1).
-            // Older versions (v11_4, v10_11) have a different
-            // DoesSupportVideoMode signature and are not used here; if those
-            // are the only ones the driver exposes, ask the user to upgrade
-            // Desktop Video.
-            struct OutputIIDFallback { REFIID iid; const char* tag; };
-            static const OutputIIDFallback s_outputIIDs[] = {
-                { IID_IDeckLinkOutput,         "current"  },
-                { IID_IDeckLinkOutput_v15_3_1, "v15_3_1"  },
-                { IID_IDeckLinkOutput_v14_2_1, "v14_2_1"  },
-            };
-            HRESULT hrQI = E_NOINTERFACE;
-            const char* matchedIID = nullptr;
-            for (const auto& slot : s_outputIIDs)
-            {
-                hrQI = deckLinkDevice->QueryInterface(slot.iid, (void**)&playbackDevice);
-                if (hrQI == S_OK) { matchedIID = slot.tag; break; }
-            }
+            // IDeckLinkOutput must be the current SDK 16.0 IID.
+            //
+            // We previously tried to fall back to v15_3_1/v14_2_1 when the
+            // current IID was unavailable, but those older interfaces have
+            // INCOMPATIBLE vtable layouts: v14_2_1 has
+            // SetVideoOutputFrameMemoryAllocator at slot 7 where current SDK
+            // has CreateVideoFrame, and v15_3_1 likewise shifts later
+            // methods. Casting an older pointer to IDeckLinkOutput* compiles
+            // but calls the wrong methods at runtime, crashing RV as soon as
+            // the user enables the output (e.g. View -> Presentation).
+            //
+            // Only methods up to slot 6 (DisableVideoOutput) are vtable-safe
+            // across the version range — not enough for actual playback.
+            //
+            // If the QueryInterface below fails, we surface a clear error
+            // asking the user to update Desktop Video to a release that
+            // matches the SDK we built against. We additionally probe for
+            // older IIDs purely for diagnostics so the log indicates which
+            // legacy interface the driver does expose.
+            HRESULT hrQI = deckLinkDevice->QueryInterface(IID_IDeckLinkOutput, (void**)&playbackDevice);
             std::cerr << "INFO: BlackMagicDevices: device[" << deviceIndex << "] '" << nameString
-                      << "' QueryInterface(IDeckLinkOutput) hr=0x" << std::hex << hrQI << std::dec
-                      << (matchedIID ? std::string(" via ") + matchedIID : std::string())
-                      << std::endl;
+                      << "' QueryInterface(IDeckLinkOutput) hr=0x" << std::hex << hrQI << std::dec << std::endl;
             if (hrQI != S_OK)
             {
+                // Diagnostic-only probe of legacy IIDs.
+                IDeckLink* probe = deckLinkDevice;
+                struct LegacyIIDProbe { REFIID iid; const char* tag; };
+                static const LegacyIIDProbe s_legacy[] = {
+                    { IID_IDeckLinkOutput_v15_3_1, "v15_3_1" },
+                    { IID_IDeckLinkOutput_v14_2_1, "v14_2_1" },
+                };
+                for (const auto& slot : s_legacy)
+                {
+                    void* tmp = nullptr;
+                    if (probe->QueryInterface(slot.iid, &tmp) == S_OK)
+                    {
+                        std::cerr << "INFO: BlackMagicDevices: '" << nameString
+                                  << "' exposes legacy " << slot.tag << " interface "
+                                  << "(vtable not safe to use — see code comment)." << std::endl;
+                        static_cast<IUnknown*>(tmp)->Release();
+                    }
+                }
                 std::cerr << "ERROR: BlackMagicDevices: '" << nameString
-                          << "' does not expose any supported IDeckLinkOutput interface. "
-                          << "Desktop Video runtime may be too old. Upgrade to Desktop Video 14.2.1 or later "
-                          << "(https://www.blackmagicdesign.com/support)." << std::endl;
+                          << "' does not expose the current IDeckLinkOutput interface "
+                             "(SDK 16.0). Update Desktop Video to a release matching the "
+                             "SDK used to build OpenRV. Download: "
+                             "https://www.blackmagicdesign.com/support" << std::endl;
             }
             if (hrQI == S_OK)
             {
