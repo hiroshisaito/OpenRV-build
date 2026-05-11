@@ -56,17 +56,20 @@
 
 * [ ] 解像度 / フレームレート（24, 25, 29.97, 30, 50, 59.94, 60）切替
 
-## 4. Blackmagic Decklink 出力プラグイン (DeckLink 4K Pro + DV 12.5.1) ⏸ BLOCKED
+## 4. Blackmagic Decklink 出力プラグイン (DeckLink 4K Pro + DV 16.0.1) ✅ PASS (2026-05-11)
 
-* [ ] File → Preferences → Video → Output Module に **BlackMagic** が出現 — **BLOCKED** (Desktop Video 16.x 系へアップグレード必須)
+* [x] File → Preferences → Video → Output Module に **BlackMagic** が出現 — **PASS**
 
-* [ ] DeckLink から外部モニタへの映像出力
+* [x] DeckLink から外部モニタへの映像出力 — **PASS**
 
-* [ ] SDI / HDMI 切替
+* [x] **音声出力** — **PASS**
 
-* [ ] フォーマット切替が反映される
+* [ ] SDI / HDMI 切替（未テスト）
 
-**ブロッカー**: Desktop Video 12.5.1 は SDK 16.0 の現行 `IDeckLinkOutput` IID を公開していない。SDK が提供する過去 IID (`v15_3_1`, `v14_2_1`) は QueryInterface は通るが、vtable レイアウトが現行と非互換のため、実際に出力するとクラッシュする（commit `2977ba3d` で安全に Output モジュール非表示に変更）。本フォークの SDK 16.0 build を使うには **DV 16.x へのアップグレード**が必要。
+* [ ] フォーマット切替が反映される（未テスト）
+
+**最終構成**: Desktop Video **16.0.1** (DV 12.5.1 / 14.2.1 では SDK 16.0 の現行 IID が未公開で動作不可)。
+**前提条件**: 本フォーク（SDK 16.0 でビルド）の BMD 出力には **Desktop Video 16.x 以降が必須**。
 
 ## 5. OCIO カラーマネジメント（重要：セッション 4 のリグレッション確認）
 
@@ -229,17 +232,28 @@
   
 * 当初の私の判断「`DoesSupportVideoMode` のシグネチャが同一だから vtable 互換」は誤り。**シグネチャ一致は vtable 互換性を保証しない**。スロット位置（メソッド順序）が同一である必要がある。
 
-#### BLOCKED 段階 (commit `2977ba3d`) — 最終解決方針
+#### BLOCKED 段階 (commit `2977ba3d`) — 安全策の実装
 
 * `IDeckLinkOutput` のフォールバックを撤去、**current IID のみ使用**。
 * 古い IID は **診断専用** で QI を試し、見つかれば「v14_2_1 が公開されているが unsafe」のメッセージを表示。
 * 最終的にデバイスが追加できない場合は明確なエラー: "Update Desktop Video to a release matching the SDK"
 * `IDeckLinkConfiguration` のフォールバックは維持（SetInt/SetFlag/Release は IUnknown 近傍のスロットで安定）
 
+#### 検証結果 (2026-05-11)
+
+| Desktop Video | 結果 |
+|---|---|
+| 12.5.1 | デバイス出現しない（旧バージョン、警告表示） |
+| 14.2.1 | デバイス出現しない（v14_2_1 IID のみ公開、警告表示） |
+| **16.0.1** | **動作 ✅（映像 + 音声 OK）** |
+
+**結論**: SDK 16.0 でビルドした OpenRV を使うには Desktop Video 16.x 系のランタイムが必要。本フォークでは DV 16.0.1 で完全動作を確認。
+
 **upstream Issue 報告について**:
 - 当初の提案レポート（v14_2_1 vtable 互換）は誤りなので訂正が必要
-- 本質的な問題: SDK 16.0 と古い DV ランタイムの組み合わせは原理的に動作しない
+- 本質的な問題: SDK 16.0 と古い DV ランタイムの組み合わせは原理的に動作しない（IID も vtable も不一致）
 - upstream の解決方針候補:
   1. version-aware wrapper を実装（ABI 違いを抽象化）
   2. ビルド時に「対応 DV バージョン」をメッセージで明示
   3. 起動時に DV バージョンを検出して非対応なら明確にエラー
+- 本フォークでは選択肢 3 を簡易実装済（commit `2977ba3d` の診断メッセージ）
