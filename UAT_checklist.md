@@ -71,15 +71,17 @@
 **最終構成**: Desktop Video **16.0.1** (DV 12.5.1 / 14.2.1 では SDK 16.0 の現行 IID が未公開で動作不可)。
 **前提条件**: 本フォーク（SDK 16.0 でビルド）の BMD 出力には **Desktop Video 16.x 以降が必須**。
 
-## 5. OCIO カラーマネジメント（重要：セッション 4 のリグレッション確認）
+## 5. OCIO カラーマネジメント ✅ PASS (2026-05-11)
 
-* [ ] View → OCIO Display → sRGB - Display → **ACES 2.0 - SDR 100 nits (Rec.709)** で **黒画面にならない** ✅
+セッション 4 (commit `b9d9beee`) の OCIO 1D LUT グローバル uniform バインディング修正が回帰なく機能していることを確認。
 
-* [ ] ACES 2.0 - HDR 1000 nits (Rec.2020) などのバリエーション
+* [x] View → OCIO Display → sRGB - Display → **ACES 2.0 - SDR 100 nits (Rec.709)** で **黒画面にならない** ✅ — **PASS**
 
-* [ ] Raw / Un-tone-mapped で問題ないこと
+* [ ] ACES 2.0 - HDR 1000 nits (Rec.2020) などのバリエーション（未テスト）
 
-* [ ] OCIO config 切替が即座に反映される
+* [ ] Raw / Un-tone-mapped で問題ないこと（未テスト）
+
+* [ ] OCIO config 切替が即座に反映される（未テスト）
 
 ## 6. Qt / GUI
 
