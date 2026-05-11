@@ -19,6 +19,7 @@
 #include <TwkUtil/ByteSwap.h>
 #include <algorithm>
 #include <cstddef>
+#include <iostream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -460,13 +461,29 @@ namespace BlackMagicDevices
                 m_decklinkVideoFormats.push_back(*p);
         }
 
-        // Get the IDeckLinkConfiguration interface
-        unsigned int result = m_deviceAPI->QueryInterface(IID_IDeckLinkConfiguration, (void**)&m_configuration);
+        // Get the IDeckLinkConfiguration interface (with IID fallback for older Desktop Video runtimes).
+        // We only call SetInt(), SetFlag() and Release() which are present and vtable-compatible
+        // across all SDK versions back to v10_2.
+        struct ConfigIIDFallback { REFIID iid; const char* tag; };
+        static const ConfigIIDFallback s_configIIDs[] = {
+            { IID_IDeckLinkConfiguration,         "current"  },
+            { IID_IDeckLinkConfiguration_v15_3_1, "v15_3_1"  },
+            { IID_IDeckLinkConfiguration_v10_11,  "v10_11"   },
+        };
+        unsigned int result = E_NOINTERFACE;
+        const char* matchedConfigIID = nullptr;
+        for (const auto& slot : s_configIIDs)
+        {
+            result = m_deviceAPI->QueryInterface(slot.iid, (void**)&m_configuration);
+            if (result == S_OK) { matchedConfigIID = slot.tag; break; }
+        }
         if (result != S_OK)
         {
             m_configuration = NULL;
             TWK_THROW_EXC_STREAM("Could not get the IDeckLinkConfiguration interface (error 0x" << hex << result << ")\n");
         }
+        std::cerr << "INFO: BlackMagicDevices: '" << name << "' IDeckLinkConfiguration via "
+                  << (matchedConfigIID ? matchedConfigIID : "?") << std::endl;
     }
 
     DeckLinkVideoDevice::~DeckLinkVideoDevice()

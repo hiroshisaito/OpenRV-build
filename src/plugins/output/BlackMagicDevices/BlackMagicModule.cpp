@@ -13,6 +13,7 @@
 #include <String.h>
 #endif
 
+#include <iostream>
 #include <map>
 #include <sstream>
 
@@ -307,6 +308,12 @@ namespace BlackMagicDevices
         RAII<IDeckLinkIterator> deckLinkIterator(getDeckLinkIterator());
         IDeckLink* deckLinkDevice = nullptr;
 
+        std::cerr << "INFO: BlackMagicDevices: iterator obtained, enumerating devices..." << std::endl;
+        int deviceIndex = 0;
+        int devicesAccepted = 0;
+        int devicesRejectedNoFormats = 0;
+        int devicesRejectedNoOutput = 0;
+
         while (deckLinkIterator.get()->Next(&deckLinkDevice) == S_OK)
         {
             IDeckLinkOutput* playbackDevice = nullptr;
@@ -340,21 +347,70 @@ namespace BlackMagicDevices
             string nameString(name);
 #endif
 
-            if (deckLinkDevice->QueryInterface(IID_IDeckLinkOutput, (void**)&playbackDevice) == S_OK)
+            // Try the current SDK 16.0 IID first, then fall back to older
+            // SDK IIDs in case the user's Desktop Video runtime is older than
+            // our SDK. Versions v15_3_1 and v14_2_1 are vtable-compatible
+            // with the current IDeckLinkOutput for the methods we call
+            // (DoesSupportVideoMode signature unchanged since SDK 14.2.1).
+            // Older versions (v11_4, v10_11) have a different
+            // DoesSupportVideoMode signature and are not used here; if those
+            // are the only ones the driver exposes, ask the user to upgrade
+            // Desktop Video.
+            struct OutputIIDFallback { REFIID iid; const char* tag; };
+            static const OutputIIDFallback s_outputIIDs[] = {
+                { IID_IDeckLinkOutput,         "current"  },
+                { IID_IDeckLinkOutput_v15_3_1, "v15_3_1"  },
+                { IID_IDeckLinkOutput_v14_2_1, "v14_2_1"  },
+            };
+            HRESULT hrQI = E_NOINTERFACE;
+            const char* matchedIID = nullptr;
+            for (const auto& slot : s_outputIIDs)
             {
-                DeckLinkVideoDevice* device = new DeckLinkVideoDevice(this, nameString, deckLinkDevice, playbackDevice);
-                if (device->numVideoFormats() != 0)
+                hrQI = deckLinkDevice->QueryInterface(slot.iid, (void**)&playbackDevice);
+                if (hrQI == S_OK) { matchedIID = slot.tag; break; }
+            }
+            std::cerr << "INFO: BlackMagicDevices: device[" << deviceIndex << "] '" << nameString
+                      << "' QueryInterface(IDeckLinkOutput) hr=0x" << std::hex << hrQI << std::dec
+                      << (matchedIID ? std::string(" via ") + matchedIID : std::string())
+                      << std::endl;
+            if (hrQI != S_OK)
+            {
+                std::cerr << "ERROR: BlackMagicDevices: '" << nameString
+                          << "' does not expose any supported IDeckLinkOutput interface. "
+                          << "Desktop Video runtime may be too old. Upgrade to Desktop Video 14.2.1 or later "
+                          << "(https://www.blackmagicdesign.com/support)." << std::endl;
+            }
+            if (hrQI == S_OK)
+            {
+                DeckLinkVideoDevice* device = nullptr;
+                try
                 {
-                    m_devices.push_back(device);
+                    device = new DeckLinkVideoDevice(this, nameString, deckLinkDevice, playbackDevice);
+                    size_t nFmt = device->numVideoFormats();
+                    std::cerr << "INFO: BlackMagicDevices: device[" << deviceIndex << "] '" << nameString
+                              << "' numVideoFormats=" << nFmt << std::endl;
+                    if (nFmt != 0)
+                    {
+                        m_devices.push_back(device);
+                        ++devicesAccepted;
+                    }
+                    else
+                    {
+                        delete device;
+                        device = nullptr;
+                        ++devicesRejectedNoFormats;
+                    }
                 }
-                else
+                catch (const std::exception& e)
                 {
+                    std::cerr << "ERROR: BlackMagicDevices: device[" << deviceIndex << "] '" << nameString
+                              << "' construction failed: " << e.what() << std::endl;
                     delete device;
-                    device = nullptr;
                 }
             }
             else
             {
+                ++devicesRejectedNoOutput;
                 if (playbackDevice != nullptr)
                 {
                     playbackDevice->Release();
@@ -366,7 +422,13 @@ namespace BlackMagicDevices
                     deckLinkDevice = nullptr;
                 }
             }
+            ++deviceIndex;
         }
+
+        std::cerr << "INFO: BlackMagicDevices: enumeration done. seen=" << deviceIndex
+                  << " accepted=" << devicesAccepted
+                  << " no_formats=" << devicesRejectedNoFormats
+                  << " no_output_iface=" << devicesRejectedNoOutput << std::endl;
 
 #ifdef PLATFORM_WINDOWS
         glewInit(nullptr);
